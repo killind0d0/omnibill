@@ -224,14 +224,15 @@ pub fn post_purchase(
 
                     tx.execute(
                         "INSERT INTO resource_lots (
-                            id, resource_id, batch_number, expiry_date, mrp_paise
-                        ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                            id, resource_id, batch_number, expiry_date, mrp_paise, cost_price_paise
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
                             &new_id,
                             &line.resource_id,
                             batch_number,
                             &line.expiry_date,
                             mrp,
+                            line.unit_price_paise,
                         ],
                     )?;
                     new_id
@@ -396,7 +397,23 @@ pub fn post_purchase(
         )?;
     }
 
-    // 9. Commit transaction
+    // 9. Assert Ledger strictly balanced before commit
+    let (debit_sum, credit_sum): (i64, i64) = tx.query_row(
+        "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0)
+         FROM ledger_entries
+         WHERE transaction_id = ?1",
+        params![&tx_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if debit_sum != credit_sum {
+        return Err(PostingError::UnbalancedLedger {
+            debit_paise: debit_sum,
+            credit_paise: credit_sum,
+        });
+    }
+
+    // 10. Commit transaction
     tx.commit()?;
 
     Ok(PostedPurchase {

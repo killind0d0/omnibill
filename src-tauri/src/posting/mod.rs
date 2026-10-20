@@ -11,7 +11,7 @@ pub use returns::{
     PostedReturn, PurchaseReturnInput, ReturnLineInput, SaleReturnInput, post_purchase_return,
     post_sale_return,
 };
-pub use sale::post_sale;
+pub use sale::{post_sale, post_sale_with_payments};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +61,25 @@ pub struct PostedSale {
     pub totals: PostedSaleTotals,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentTenderInput {
+    pub mode: payment::PaymentMode,
+    pub amount_paise: i64,
+    pub reference_number: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleWithPaymentsInput {
+    pub sale: SaleInput,
+    pub payments: Vec<PaymentTenderInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostedSaleWithPayments {
+    pub sale: PostedSale,
+    pub payment_ids: Vec<String>,
+}
+
 #[derive(Debug)]
 pub enum PostingError {
     Database(rusqlite::Error),
@@ -107,6 +126,14 @@ pub enum PostingError {
         transaction_id: String,
         allocated_paise: i64,
         unpaid_balance_paise: i64,
+    },
+    UnbalancedLedger {
+        debit_paise: i64,
+        credit_paise: i64,
+    },
+    PaymentMismatch {
+        total_amount_paise: i64,
+        tendered_paise: i64,
     },
 }
 
@@ -199,6 +226,22 @@ impl std::fmt::Display for PostingError {
                 f,
                 "Payment allocation ({} paise) exceeds unpaid invoice balance ({} paise) for transaction '{}'",
                 allocated_paise, unpaid_balance_paise, transaction_id
+            ),
+            PostingError::UnbalancedLedger {
+                debit_paise,
+                credit_paise,
+            } => write!(
+                f,
+                "Ledger entries do not balance: total debits = {} paise, total credits = {} paise",
+                debit_paise, credit_paise
+            ),
+            PostingError::PaymentMismatch {
+                total_amount_paise,
+                tendered_paise,
+            } => write!(
+                f,
+                "Payment tender total ({} paise) does not match invoice total ({} paise)",
+                tendered_paise, total_amount_paise
             ),
         }
     }

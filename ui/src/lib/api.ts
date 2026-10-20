@@ -339,61 +339,77 @@ export async function apiPostSale(
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const res = await invoke<{ transaction_id: string; invoice_number: string }>('cmd_post_sale', {
-        db_path: getDbPath(),
-        input: {
-          invoice_date: sale.invoice_date,
-          seller_state_code: sale.seller_state_code,
-          place_of_supply_state_code: sale.place_of_supply_state_code,
-          customer: sale.customer_phone || sale.customer_name || null,
-          price_mode: sale.price_mode === 'EXCLUSIVE' ? 'Exclusive' : 'Inclusive',
-          lines: sale.lines.map((l) => ({
-            resource_id: l.resource_id,
-            quantity_milli: l.quantity_milli,
-            unit_price_paise: l.unit_price_paise,
-            discount_paise: l.discount_paise,
-            tax_rate_bps: l.tax_rate_bps,
-          })),
-        },
-      });
 
-      if (res?.invoice_number) {
-        sale.invoice_number = res.invoice_number;
-        sale.transaction_id = res.transaction_id;
+      if (sale.payment && sale.totals.total_amount_paise > 0) {
+        // Atomic single-transaction post for invoice + tender vouchers
+        const modeMap: Record<string, string> = {
+          CASH: 'Cash',
+          UPI: 'Upi',
+          CARD: 'Card',
+          BANK_TRANSFER: 'BankTransfer',
+        };
 
-        // Post payment voucher into SQLite if payment details are present
-        if (sale.payment && sale.totals.total_amount_paise > 0) {
-          const modeMap: Record<string, string> = {
-            CASH: 'Cash',
-            UPI: 'Upi',
-            CARD: 'Card',
-            BANK_TRANSFER: 'BankTransfer',
-          };
-          try {
-            await invoke('cmd_post_payment', {
-              db_path: getDbPath(),
-              input: {
-                entity_id: 'ent_walk_in',
-                payment_mode: modeMap[sale.payment.mode] || 'Cash',
+        const res = await invoke<{
+          sale: { transaction_id: string; invoice_number: string };
+          payment_ids: string[];
+        }>('cmd_post_sale_with_payments', {
+          db_path: getDbPath(),
+          input: {
+            sale: {
+              invoice_date: sale.invoice_date,
+              seller_state_code: sale.seller_state_code,
+              place_of_supply_state_code: sale.place_of_supply_state_code,
+              customer: sale.customer_phone || sale.customer_name || null,
+              price_mode: sale.price_mode === 'EXCLUSIVE' ? 'Exclusive' : 'Inclusive',
+              lines: sale.lines.map((l) => ({
+                resource_id: l.resource_id,
+                quantity_milli: l.quantity_milli,
+                unit_price_paise: l.unit_price_paise,
+                discount_paise: l.discount_paise,
+                tax_rate_bps: l.tax_rate_bps,
+              })),
+            },
+            payments: [
+              {
+                mode: modeMap[sale.payment.mode] || 'Cash',
                 amount_paise: sale.totals.total_amount_paise,
-                reference_number: sale.payment.reference_number || sale.invoice_number,
-                payment_date: sale.invoice_date,
-                allocations: [
-                  {
-                    transaction_id: res.transaction_id,
-                    amount_paise: sale.totals.total_amount_paise,
-                  },
-                ],
+                reference_number: sale.payment.reference_number || null,
               },
-            });
-          } catch (payErr) {
-            console.warn('cmd_post_payment after sale warning:', payErr);
-          }
+            ],
+          },
+        });
+
+        if (res?.sale?.invoice_number) {
+          sale.invoice_number = res.sale.invoice_number;
+          sale.transaction_id = res.sale.transaction_id;
+        }
+      } else {
+        const res = await invoke<{ transaction_id: string; invoice_number: string }>('cmd_post_sale', {
+          db_path: getDbPath(),
+          input: {
+            invoice_date: sale.invoice_date,
+            seller_state_code: sale.seller_state_code,
+            place_of_supply_state_code: sale.place_of_supply_state_code,
+            customer: sale.customer_phone || sale.customer_name || null,
+            price_mode: sale.price_mode === 'EXCLUSIVE' ? 'Exclusive' : 'Inclusive',
+            lines: sale.lines.map((l) => ({
+              resource_id: l.resource_id,
+              quantity_milli: l.quantity_milli,
+              unit_price_paise: l.unit_price_paise,
+              discount_paise: l.discount_paise,
+              tax_rate_bps: l.tax_rate_bps,
+            })),
+          },
+        });
+
+        if (res?.invoice_number) {
+          sale.invoice_number = res.invoice_number;
+          sale.transaction_id = res.transaction_id;
         }
       }
     } catch (err: any) {
       const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
-      console.error('Tauri cmd_post_sale failed:', errMsg);
+      console.error('Tauri sales post failed:', errMsg);
       // Return genuine failure result to alert UI
       return { success: false, invoice_number: sale.invoice_number, error: errMsg };
     }

@@ -68,31 +68,38 @@ function computeLine(line, priceMode, isIntraState) {
   } else {
     // INCLUSIVE
     const lineBase = grossPaise - effectiveDiscount;
-    const bBig = BigInt(lineBase);
-    const denom = 10000n + rateBig;
-    const num = bBig * 10000n;
-    const taxableBig = roundDivBigInt(num, denom);
-    taxablePaise = Number(taxableBig);
-
-    const tBig = BigInt(taxablePaise);
-
-    if (isIntraState) {
-      const taxNum = tBig * rateBig;
-      const cBig = roundDivBigInt(taxNum, 20000n);
-      const c = Number(cBig);
-      cgstPaise = c;
-      sgstPaise = c;
-      igstPaise = 0;
-    } else {
-      const taxNum = tBig * rateBig;
-      const iBig = roundDivBigInt(taxNum, 10000n);
-      const i = Number(iBig);
+    if (lineBase === 0 || taxRateBps === 0) {
+      taxablePaise = lineBase;
       cgstPaise = 0;
       sgstPaise = 0;
-      igstPaise = i;
-    }
+      igstPaise = 0;
+      lineTotalPaise = lineBase;
+    } else {
+      const bBig = BigInt(lineBase);
+      const denom = 10000n + rateBig;
+      const num = bBig * 10000n;
+      const taxableBig = roundDivBigInt(num, denom);
+      taxablePaise = Number(taxableBig);
 
-    lineTotalPaise = taxablePaise + cgstPaise + sgstPaise + igstPaise;
+      const totalTaxPaise = lineBase - taxablePaise;
+
+      if (isIntraState) {
+        const halfTax = Math.floor(totalTaxPaise / 2);
+        const remainder = totalTaxPaise % 2;
+        if (remainder !== 0) {
+          taxablePaise += remainder;
+        }
+        cgstPaise = halfTax;
+        sgstPaise = halfTax;
+        igstPaise = 0;
+      } else {
+        cgstPaise = 0;
+        sgstPaise = 0;
+        igstPaise = totalTaxPaise;
+      }
+
+      lineTotalPaise = taxablePaise + cgstPaise + sgstPaise + igstPaise;
+    }
   }
 
   return {

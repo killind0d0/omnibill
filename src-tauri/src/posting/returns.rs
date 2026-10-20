@@ -591,6 +591,22 @@ pub fn post_sale_return(
         )?;
     }
 
+    // Assert Ledger strictly balanced before commit
+    let (debit_sum, credit_sum): (i64, i64) = tx.query_row(
+        "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0)
+         FROM ledger_entries
+         WHERE transaction_id = ?1",
+        params![&tx_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if debit_sum != credit_sum {
+        return Err(PostingError::UnbalancedLedger {
+            debit_paise: debit_sum,
+            credit_paise: credit_sum,
+        });
+    }
+
     tx.commit()?;
 
     Ok(PostedReturn {
@@ -995,6 +1011,22 @@ pub fn post_purchase_return(
                 available_milli: needed_milli - remaining,
             });
         }
+    }
+
+    // Assert Ledger strictly balanced before commit
+    let (debit_sum, credit_sum): (i64, i64) = tx.query_row(
+        "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0)
+         FROM ledger_entries
+         WHERE transaction_id = ?1",
+        params![&tx_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if debit_sum != credit_sum {
+        return Err(PostingError::UnbalancedLedger {
+            debit_paise: debit_sum,
+            credit_paise: credit_sum,
+        });
     }
 
     tx.commit()?;

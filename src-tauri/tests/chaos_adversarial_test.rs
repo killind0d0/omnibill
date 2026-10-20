@@ -265,21 +265,34 @@ fn test_scope1_fifo_lot_deduction_insufficient_and_negative_stock() {
     let err_partial = post_sale(&mut conn, &sale_input);
     assert!(matches!(err_partial, Err(PostingError::InsufficientStock { requested_milli: 1000, available_milli: 500, .. })));
 
-    // 3. Add lot with negative delta (e.g. corrupted stock movement or manual adjustment)
+    // 3. Negative delta directly on empty lot is rejected by database trigger trg_stock_movements_no_negative_stock
     conn.execute(
         "INSERT INTO resource_lots (id, resource_id, batch_number, mrp_paise)
          VALUES ('lot_2', 'res_stock', 'B2', 5000)",
         [],
     ).unwrap();
+    let err_trigger = conn.execute(
+        "INSERT INTO stock_movements (id, resource_id, lot_id, reason, quantity_delta_milli)
+         VALUES ('sm_2_bad', 'res_stock', 'lot_2', 'DAMAGE', -500)",
+        [],
+    );
+    assert!(err_trigger.is_err(), "Trigger must reject negative lot stock");
+
+    // Add 1000 in and 1000 out to make lot_2 balance 0
     conn.execute(
         "INSERT INTO stock_movements (id, resource_id, lot_id, reason, quantity_delta_milli)
-         VALUES ('sm_2', 'res_stock', 'lot_2', 'DAMAGE', -500)",
+         VALUES ('sm_2_in', 'res_stock', 'lot_2', 'PURCHASE', 1000)",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO stock_movements (id, resource_id, lot_id, reason, quantity_delta_milli)
+         VALUES ('sm_2_out', 'res_stock', 'lot_2', 'DAMAGE', -1000)",
         [],
     ).unwrap();
 
-    // Available is still only 500 from lot_1 (lot_2 has negative sum so available <= 0)
-    let err_negative_delta = post_sale(&mut conn, &sale_input);
-    assert!(matches!(err_negative_delta, Err(PostingError::InsufficientStock { requested_milli: 1000, available_milli: 500, .. })));
+    // Available is still only 500 from lot_1 (lot_2 has 0 balance)
+    let err_zero_delta = post_sale(&mut conn, &sale_input);
+    assert!(matches!(err_zero_delta, Err(PostingError::InsufficientStock { requested_milli: 1000, available_milli: 500, .. })));
 
     cleanup_db(&path);
 }

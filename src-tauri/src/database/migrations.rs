@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Result};
 
-pub const LATEST_VERSION: i32 = 3;
+pub const LATEST_VERSION: i32 = 4;
 
 pub struct Migration {
     pub version: i32,
@@ -23,6 +23,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 3,
         description: "Schema additions for posting engine: transaction types, original id, invoice date, round off, invariant triggers, and guards",
         sql: MIGRATION_3_SQL,
+    },
+    Migration {
+        version: 4,
+        description: "Lot cost price, transaction price mode, negative stock trigger, and performance indexes",
+        sql: MIGRATION_4_SQL,
     },
 ];
 
@@ -472,6 +477,68 @@ BEGIN
             OLD.next_number IS NEW.next_number AND
             OLD.is_active != NEW.is_active
         )
+    );
+END;
+"#;
+
+pub const MIGRATION_4_SQL: &str = r#"
+-- 1. Add cost_price_paise to resource_lots (strictly >= 0)
+ALTER TABLE resource_lots ADD COLUMN cost_price_paise INTEGER NOT NULL DEFAULT 0 CHECK (cost_price_paise >= 0);
+
+-- 2. Add price_mode to transactions (strictly EXCLUSIVE or INCLUSIVE)
+ALTER TABLE transactions ADD COLUMN price_mode TEXT NOT NULL DEFAULT 'EXCLUSIVE' CHECK (price_mode IN ('EXCLUSIVE', 'INCLUSIVE'));
+
+-- 3. Unique index on (series, invoice_number) to enforce no duplicate invoice numbers
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_series_invoice ON transactions(series, invoice_number);
+
+-- 4. High-performance indexes for stock movements and ledger
+CREATE INDEX IF NOT EXISTS idx_stock_movements_lot ON stock_movements(lot_id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_resource ON stock_movements(resource_id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_tx ON stock_movements(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_tx ON ledger_entries(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_pay ON ledger_entries(payment_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_account ON ledger_entries(account_id);
+
+-- 5. Trigger strictly preventing negative stock on resource_lots
+CREATE TRIGGER IF NOT EXISTS trg_stock_movements_no_negative_stock
+BEFORE INSERT ON stock_movements
+WHEN NEW.lot_id IS NOT NULL AND NEW.quantity_delta_milli < 0
+BEGIN
+    SELECT RAISE(ABORT, 'INSUFFICIENT_STOCK: Stock movement would drive lot quantity negative')
+    WHERE (
+        COALESCE((SELECT SUM(quantity_delta_milli) FROM stock_movements WHERE lot_id = NEW.lot_id), 0) + NEW.quantity_delta_milli < 0
+    );
+END;
+
+-- 6. Updated trg_transactions_update_guard covering price_mode and original_transaction_id
+DROP TRIGGER IF EXISTS trg_transactions_update_guard;
+CREATE TRIGGER IF NOT EXISTS trg_transactions_update_guard
+BEFORE UPDATE ON transactions
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: Only status transition from POSTED to CANCELLED is allowed; all other columns must remain unchanged.')
+    WHERE NOT (
+        OLD.status = 'POSTED' AND NEW.status = 'CANCELLED' AND
+        OLD.id IS NEW.id AND
+        OLD.seller_state_code IS NEW.seller_state_code AND
+        OLD.place_of_supply_state_code IS NEW.place_of_supply_state_code AND
+        OLD.series IS NEW.series AND
+        OLD.invoice_number IS NEW.invoice_number AND
+        OLD.entity_id IS NEW.entity_id AND
+        OLD.price_mode IS NEW.price_mode AND
+        OLD.subtotal_paise IS NEW.subtotal_paise AND
+        OLD.discount_paise IS NEW.discount_paise AND
+        OLD.taxable_paise IS NEW.taxable_paise AND
+        OLD.cgst_paise IS NEW.cgst_paise AND
+        OLD.sgst_paise IS NEW.sgst_paise AND
+        OLD.igst_paise IS NEW.igst_paise AND
+        OLD.round_off_paise IS NEW.round_off_paise AND
+        OLD.total_amount_paise IS NEW.total_amount_paise AND
+        OLD.notes IS NEW.notes AND
+        OLD.created_by_user_id IS NEW.created_by_user_id AND
+        OLD.created_at IS NEW.created_at AND
+        OLD.transaction_type IS NEW.transaction_type AND
+        OLD.original_transaction_id IS NEW.original_transaction_id AND
+        OLD.invoice_date IS NEW.invoice_date
     );
 END;
 "#;

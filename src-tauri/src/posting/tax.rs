@@ -137,43 +137,45 @@ pub fn compute_line(
             let line_base = gross_paise
                 .checked_sub(discount_paise)
                 .ok_or(PostingError::MathOverflow)?;
-            let b_i128 = line_base as i128;
-            let denom = 10000i128
-                .checked_add(rate_bps as i128)
-                .ok_or(PostingError::MathOverflow)?;
-            let num = b_i128
-                .checked_mul(10000)
-                .ok_or(PostingError::MathOverflow)?;
-            let taxable_i128 = round_div_i128(num, denom)?;
-            let taxable_paise =
-                i64::try_from(taxable_i128).map_err(|_| PostingError::MathOverflow)?;
-
-            let t_i128 = taxable_paise as i128;
-            let r_i128 = rate_bps as i128;
-
-            let (cgst, sgst, igst) = if is_intra_state {
-                let num = t_i128
-                    .checked_mul(r_i128)
-                    .ok_or(PostingError::MathOverflow)?;
-                let c_i128 = round_div_i128(num, 20000)?;
-                let c = i64::try_from(c_i128).map_err(|_| PostingError::MathOverflow)?;
-                (c, c, 0)
+            if line_base == 0 || rate_bps == 0 {
+                (line_base, 0, 0, 0, line_base)
             } else {
-                let num = t_i128
-                    .checked_mul(r_i128)
+                let b_i128 = line_base as i128;
+                let denom = 10000i128
+                    .checked_add(rate_bps as i128)
                     .ok_or(PostingError::MathOverflow)?;
-                let i_i128 = round_div_i128(num, 10000)?;
-                let i = i64::try_from(i_i128).map_err(|_| PostingError::MathOverflow)?;
-                (0, 0, i)
-            };
+                let num = b_i128
+                    .checked_mul(10000)
+                    .ok_or(PostingError::MathOverflow)?;
+                let mut taxable_paise = i64::try_from(round_div_i128(num, denom)?)
+                    .map_err(|_| PostingError::MathOverflow)?;
 
-            let line_total = taxable_paise
-                .checked_add(cgst)
-                .and_then(|x| x.checked_add(sgst))
-                .and_then(|x| x.checked_add(igst))
-                .ok_or(PostingError::MathOverflow)?;
+                let total_tax_paise = line_base
+                    .checked_sub(taxable_paise)
+                    .ok_or(PostingError::MathOverflow)?;
 
-            (taxable_paise, cgst, sgst, igst, line_total)
+                let (cgst, sgst, igst) = if is_intra_state {
+                    let half_tax = total_tax_paise / 2;
+                    let remainder = total_tax_paise % 2;
+                    if remainder != 0 {
+                        // When total tax split is odd, adjust taxable by the 1 remainder paisa so line_total == line_base exactly
+                        taxable_paise = taxable_paise
+                            .checked_add(remainder)
+                            .ok_or(PostingError::MathOverflow)?;
+                    }
+                    (half_tax, half_tax, 0)
+                } else {
+                    (0, 0, total_tax_paise)
+                };
+
+                let line_total = taxable_paise
+                    .checked_add(cgst)
+                    .and_then(|x| x.checked_add(sgst))
+                    .and_then(|x| x.checked_add(igst))
+                    .ok_or(PostingError::MathOverflow)?;
+
+                (taxable_paise, cgst, sgst, igst, line_total)
+            }
         }
     };
 
@@ -642,12 +644,12 @@ mod tests {
                 let comp = compute_line(&line, PriceMode::Inclusive, true).unwrap();
                 let sum_tax = comp.cgst_paise + comp.sgst_paise;
                 let calculated_total = comp.taxable_paise + sum_tax;
-                let diff = (calculated_total - price).abs();
-                assert!(
-                    diff <= 1,
-                    "Inclusive taxable + tax must be within 1 paisa of MRP {} (got taxable={}, tax={}, rate={})",
+                assert_eq!(
+                    calculated_total, price,
+                    "Inclusive taxable + tax must equal exact MRP base {} (got taxable={}, tax={}, rate={})",
                     price, comp.taxable_paise, sum_tax, rate
                 );
+                assert_eq!(comp.line_total_paise, price);
             }
         }
     }

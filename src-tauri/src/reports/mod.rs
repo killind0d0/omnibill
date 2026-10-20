@@ -474,6 +474,59 @@ impl Deref for Gstr1CategorySummary {
     }
 }
 
+/// Validates an Indian Goods and Services Tax Identification Number (GSTIN).
+/// Standard format: 2 digits (state code) + 10 alphanumeric (PAN) + 1 entity + 'Z' (or alphanumeric) + 1 check character.
+pub fn is_valid_gstin(gstin: &str) -> bool {
+    let s = gstin.trim();
+    if s.len() != 15 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    // 1st & 2nd chars: state code digits
+    if !bytes[0].is_ascii_digit() || !bytes[1].is_ascii_digit() {
+        return false;
+    }
+    // 3rd to 7th: PAN letters (A-Z)
+    for &b in &bytes[2..7] {
+        if !b.is_ascii_uppercase() {
+            return false;
+        }
+    }
+    // 8th to 11th: PAN digits (0-9)
+    for &b in &bytes[7..11] {
+        if !b.is_ascii_digit() {
+            return false;
+        }
+    }
+    // 12th: PAN 10th char letter (A-Z)
+    if !bytes[11].is_ascii_uppercase() {
+        return false;
+    }
+    // 13th: entity number (1-9 or A-Z)
+    if !bytes[12].is_ascii_alphanumeric() {
+        return false;
+    }
+    // 14th: default 'Z' (standard) or alphanumeric
+    if !bytes[13].is_ascii_alphanumeric() {
+        return false;
+    }
+    // 15th: checksum digit/char
+    if !bytes[14].is_ascii_alphanumeric() {
+        return false;
+    }
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gstr1DocumentSummaryEntry {
+    pub series: String,
+    pub from_invoice_number: String,
+    pub to_invoice_number: String,
+    pub total_issued: i64,
+    pub cancelled_count: i64,
+    pub net_issued: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gstr1HsnEntry {
     pub hsn_code: String,
@@ -499,6 +552,8 @@ pub struct Gstr1Report {
     pub b2c_small: Gstr1CategorySummary,
     pub hsn_summary: Vec<Gstr1HsnEntry>,
     pub hsn_wise_summary: Vec<Gstr1HsnEntry>,
+    #[serde(default)]
+    pub doc_summary: Vec<Gstr1DocumentSummaryEntry>,
     pub total_taxable_paise: i64,
     pub total_cgst_paise: i64,
     pub total_sgst_paise: i64,
@@ -677,7 +732,7 @@ pub fn get_gstr1_summary(
 
         let has_gstin = gstin
             .as_ref()
-            .map(|g| !g.trim().is_empty())
+            .map(|g| is_valid_gstin(g))
             .unwrap_or(false);
 
         if has_gstin {
@@ -697,6 +752,42 @@ pub fn get_gstr1_summary(
                 add_invoice_to_category(&mut b2c_small, entry)?;
             }
         }
+    }
+
+    // Table 13: Document Summary (reconciles active and cancelled documents per series)
+    let mut doc_stmt = conn.prepare(
+        "SELECT
+            t.series,
+            MIN(t.invoice_number) AS from_inv,
+            MAX(t.invoice_number) AS to_inv,
+            COUNT(*) AS total_count,
+            SUM(CASE WHEN t.status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_count
+         FROM transactions t
+         WHERE t.invoice_date >= ?1
+           AND t.invoice_date <= ?2
+         GROUP BY t.series
+         ORDER BY t.series ASC",
+    )?;
+
+    let mut doc_summary = Vec::new();
+    let doc_rows = doc_stmt.query_map(params![&start_date, &end_date], |row| {
+        let series: String = row.get(0)?;
+        let from_inv: String = row.get(1)?;
+        let to_inv: String = row.get(2)?;
+        let total: i64 = row.get(3)?;
+        let cancelled: i64 = row.get(4)?;
+        Ok(Gstr1DocumentSummaryEntry {
+            series,
+            from_invoice_number: from_inv,
+            to_invoice_number: to_inv,
+            total_issued: total,
+            cancelled_count: cancelled,
+            net_issued: total - cancelled,
+        })
+    })?;
+
+    for dr in doc_rows {
+        doc_summary.push(dr?);
     }
 
     // HSN-wise summary
@@ -779,6 +870,7 @@ pub fn get_gstr1_summary(
         b2c_small,
         hsn_summary: hsn_summary.clone(),
         hsn_wise_summary: hsn_summary,
+        doc_summary,
         total_taxable_paise,
         total_cgst_paise,
         total_sgst_paise,

@@ -1,7 +1,8 @@
 use crate::database::open_connection;
 use crate::posting::{
-    PaymentInput, PostedPayment, PostedPurchase, PostedReturn, PostedSale, PurchaseInput,
-    PurchaseReturnInput, SaleInput, SaleReturnInput,
+    PaymentInput, PostedPayment, PostedPurchase, PostedReturn, PostedSale,
+    PostedSaleWithPayments, PurchaseInput, PurchaseReturnInput, SaleInput,
+    SaleReturnInput, SaleWithPaymentsInput,
 };
 use crate::reports::{
     DayBookReport, Gstr1Report, StockSummaryReport, TrialBalanceReport,
@@ -113,6 +114,15 @@ pub fn cmd_verify_ledger(db_path: String) -> Result<Vec<String>, String> {
 pub fn cmd_post_sale(db_path: String, input: SaleInput) -> Result<PostedSale, String> {
     let mut conn = open_connection(&db_path).map_err(|e| e.to_string())?;
     crate::posting::post_sale(&mut conn, &input).map_err(|e| e.to_string())
+}
+
+/// Posts a sales invoice and its tender payments together in a single atomic SQLite transaction.
+pub fn cmd_post_sale_with_payments(
+    db_path: String,
+    input: SaleWithPaymentsInput,
+) -> Result<PostedSaleWithPayments, String> {
+    let mut conn = open_connection(&db_path).map_err(|e| e.to_string())?;
+    crate::posting::post_sale_with_payments(&mut conn, &input).map_err(|e| e.to_string())
 }
 
 /// Posts a purchase transaction into SQLite atomically.

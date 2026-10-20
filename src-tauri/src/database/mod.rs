@@ -1482,9 +1482,13 @@ mod tests {
         run_migrations(&mut conn, &MIGRATIONS[0..2]).unwrap();
         assert_eq!(get_user_version(&conn).unwrap(), 2);
 
-        // Step 2: Run full MIGRATIONS list (upgrades v2 to v3)
-        run_migrations(&mut conn, MIGRATIONS).unwrap();
+        // Step 2: Run MIGRATIONS up to v3
+        run_migrations(&mut conn, &MIGRATIONS[0..3]).unwrap();
         assert_eq!(get_user_version(&conn).unwrap(), 3);
+
+        // Step 3: Run full MIGRATIONS list (upgrades to LATEST_VERSION)
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
+        assert_eq!(get_user_version(&conn).unwrap(), LATEST_VERSION);
     }
 
     // 26. each new CHECK constraint on transactions

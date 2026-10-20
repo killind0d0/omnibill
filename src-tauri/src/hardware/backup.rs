@@ -623,7 +623,7 @@ mod tests {
 
         assert!(!meta.backup_id.is_empty(), "backup_id must not be empty");
         assert!(!meta.created_at.is_empty(), "created_at must not be empty");
-        assert_eq!(meta.schema_version, 3, "schema_version must be 3");
+        assert_eq!(meta.schema_version, crate::database::migrations::LATEST_VERSION, "schema_version must match LATEST_VERSION");
         assert_eq!(
             meta.sha256_checksum.len(),
             64,
@@ -823,7 +823,7 @@ mod tests {
         let meta = create_backup(&conn, backup_file_path.to_str().unwrap(), Some(passphrase))
             .expect("encrypted create_backup should succeed");
 
-        assert_eq!(meta.schema_version, 3);
+        assert_eq!(meta.schema_version, crate::database::migrations::LATEST_VERSION);
 
         // Verify restore without passphrase fails with PassphraseRequired
         let err_no_pass = restore_backup(

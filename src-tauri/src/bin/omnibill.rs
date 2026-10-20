@@ -190,6 +190,15 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                 Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
+        ("POST", "/api/post_sale_with_payments") => {
+            match serde_json::from_str::<omnibill_core::posting::SaleWithPaymentsInput>(body) {
+                Ok(input) => match cmd_post_sale_with_payments(db_path.to_string(), input) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
         ("POST", "/api/post_purchase") => {
             match serde_json::from_str::<omnibill_core::posting::PurchaseInput>(body) {
                 Ok(input) => match cmd_post_purchase(db_path.to_string(), input) {

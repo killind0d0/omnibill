@@ -1,6 +1,10 @@
+use super::payment::PaymentMode;
 use super::series::allocate_invoice_number;
 use super::tax::{compute_sale, round_div_i128};
-use super::{PostedSale, PostedSaleTotals, PostingError, SaleInput};
+use super::{
+    PostedSale, PostedSaleTotals, PostedSaleWithPayments, PostingError, PriceMode, SaleInput,
+    SaleWithPaymentsInput,
+};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::collections::HashMap;
 
@@ -41,12 +45,12 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
     // 2. Allocate invoice number
     let (series, invoice_number) = allocate_invoice_number(&tx, "INV", &input.invoice_date)?;
 
-    // Resolve customer entity
+    // Resolve customer entity (deterministic: ID match first, then earliest phone match)
     let entity_id = match &input.customer {
         Some(cid) => {
             let existing: Option<String> = tx
                 .query_row(
-                    "SELECT id FROM entities WHERE id = ?1 OR phone = ?1 LIMIT 1",
+                    "SELECT id FROM entities WHERE id = ?1",
                     params![cid],
                     |r| r.get(0),
                 )
@@ -54,7 +58,19 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
             match existing {
                 Some(id) => id,
                 None => {
-                    return Err(PostingError::ResourceNotFound(format!("Entity {}", cid)));
+                    let by_phone: Option<String> = tx
+                        .query_row(
+                            "SELECT id FROM entities WHERE phone = ?1 ORDER BY created_at ASC LIMIT 1",
+                            params![cid],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    match by_phone {
+                        Some(id) => id,
+                        None => {
+                            return Err(PostingError::ResourceNotFound(format!("Entity {}", cid)));
+                        }
+                    }
                 }
             }
         }
@@ -90,6 +106,10 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
     };
 
     let tx_id = generate_id(&tx, "tx")?;
+    let price_mode_str = match input.price_mode {
+        PriceMode::Exclusive => "EXCLUSIVE",
+        PriceMode::Inclusive => "INCLUSIVE",
+    };
 
     // 3. Insert transactions
     tx.execute(
@@ -97,12 +117,14 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
             id, status, seller_state_code, place_of_supply_state_code, series,
             invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
             cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
-            transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            transaction_type, original_transaction_id, invoice_date, created_by_user_id,
+            price_mode
         ) VALUES (
             ?1, 'POSTED', ?2, ?3, ?4,
             ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14,
-            'SALE', NULL, ?15, ?16
+            'SALE', NULL, ?15, ?16,
+            ?17
         )",
         params![
             &tx_id,
@@ -121,6 +143,7 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
             computation.totals.total_amount_paise,
             &input.invoice_date,
             &user_id,
+            price_mode_str,
         ],
     )?;
 
@@ -337,28 +360,40 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
                     params![&sm_id, &resource_id, &lot_id, &tx_id, -deduct,],
                 )?;
 
-                // Calculate COGS for this lot deduction
+                // Calculate COGS for this lot deduction (lot cost -> purchase item cost -> resource master cost)
                 let unit_cost_paise: i64 = {
-                    let pur_cost: Option<i64> = tx
+                    let lot_cost: Option<i64> = tx
                         .query_row(
-                            "SELECT ti.unit_price_paise
-                             FROM transaction_items ti
-                             JOIN transactions t ON ti.transaction_id = t.id
-                             WHERE ti.lot_id = ?1 AND t.transaction_type = 'PURCHASE'
-                             ORDER BY t.created_at DESC LIMIT 1",
+                            "SELECT cost_price_paise FROM resource_lots WHERE id = ?1",
                             params![&lot_id],
                             |r| r.get(0),
                         )
                         .optional()?;
-                    match pur_cost {
+                    match lot_cost {
                         Some(cost) if cost > 0 => cost,
-                        _ => tx
-                            .query_row(
-                                "SELECT cost_price_paise FROM resources WHERE id = ?1",
-                                params![&resource_id],
-                                |r| r.get(0),
-                            )
-                            .unwrap_or(0),
+                        _ => {
+                            let pur_cost: Option<i64> = tx
+                                .query_row(
+                                    "SELECT ti.unit_price_paise
+                                     FROM transaction_items ti
+                                     JOIN transactions t ON ti.transaction_id = t.id
+                                     WHERE ti.lot_id = ?1 AND t.transaction_type = 'PURCHASE'
+                                     ORDER BY t.created_at DESC LIMIT 1",
+                                    params![&lot_id],
+                                    |r| r.get(0),
+                                )
+                                .optional()?;
+                            match pur_cost {
+                                Some(cost) if cost > 0 => cost,
+                                _ => tx
+                                    .query_row(
+                                        "SELECT cost_price_paise FROM resources WHERE id = ?1",
+                                        params![&resource_id],
+                                        |r| r.get(0),
+                                    )
+                                    .unwrap_or(0),
+                            }
+                        }
                     }
                 };
 
@@ -426,7 +461,23 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
         )?;
     }
 
-    // 6. Commit transaction
+    // 6. Assert Ledger strictly balanced before commit
+    let (debit_sum, credit_sum): (i64, i64) = tx.query_row(
+        "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0)
+         FROM ledger_entries
+         WHERE transaction_id = ?1",
+        params![&tx_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if debit_sum != credit_sum {
+        return Err(PostingError::UnbalancedLedger {
+            debit_paise: debit_sum,
+            credit_paise: credit_sum,
+        });
+    }
+
+    // 7. Commit transaction
     tx.commit()?;
 
     Ok(PostedSale {
@@ -445,12 +496,578 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
     })
 }
 
+/// Posts a sales invoice and its receipt payment tenders atomically in ONE single SQLite immediate transaction.
+/// Prevents desynchronization between bill creation and payment vouchers during power cuts or crashes.
+pub fn post_sale_with_payments(
+    conn: &mut Connection,
+    input: &SaleWithPaymentsInput,
+) -> Result<PostedSaleWithPayments, PostingError> {
+    let recursive_triggers: i64 = conn.query_row("PRAGMA recursive_triggers", [], |r| r.get(0))?;
+    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+
+    if recursive_triggers != 1 || foreign_keys != 1 {
+        return Err(PostingError::InsecureConnection {
+            recursive_triggers,
+            foreign_keys,
+        });
+    }
+
+    // 1. Validate and compute sale math
+    let computation = compute_sale(&input.sale)?;
+
+    for payment in &input.payments {
+        if payment.amount_paise <= 0 {
+            return Err(PostingError::InvalidAmount(payment.amount_paise));
+        }
+    }
+
+    let total_tendered: i64 = input.payments.iter().map(|p| p.amount_paise).sum();
+    if total_tendered > computation.totals.total_amount_paise {
+        return Err(PostingError::PaymentMismatch {
+            total_amount_paise: computation.totals.total_amount_paise,
+            tendered_paise: total_tendered,
+        });
+    }
+
+    // Begin single immediate transaction covering both sale invoice and receipt tenders
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+    // Allocate gapless invoice number
+    let (series, invoice_number) = allocate_invoice_number(&tx, "INV", &input.sale.invoice_date)?;
+
+    // Resolve customer entity (deterministic)
+    let entity_id = match &input.sale.customer {
+        Some(cid) => {
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM entities WHERE id = ?1",
+                    params![cid],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match existing {
+                Some(id) => id,
+                None => {
+                    let by_phone: Option<String> = tx
+                        .query_row(
+                            "SELECT id FROM entities WHERE phone = ?1 ORDER BY created_at ASC LIMIT 1",
+                            params![cid],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    match by_phone {
+                        Some(id) => id,
+                        None => {
+                            return Err(PostingError::ResourceNotFound(format!("Entity {}", cid)));
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            let default_id = "ent_walk_in";
+            tx.execute(
+                "INSERT OR IGNORE INTO entities (
+                    id, entity_code, entity_type, full_name, state_code
+                ) VALUES (?1, 'WALK_IN', 'CUSTOMER', 'Walk-in Customer', ?2)",
+                params![default_id, &input.sale.place_of_supply_state_code],
+            )?;
+            default_id.to_string()
+        }
+    };
+
+    // Resolve user ID
+    let user_id: String = match tx.query_row(
+        "SELECT id FROM users WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1",
+        [],
+        |r| r.get(0),
+    ) {
+        Ok(id) => id,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            let default_user = "usr_system";
+            tx.execute(
+                "INSERT OR IGNORE INTO users (id, username, password_hash, full_name, role)
+                 VALUES (?1, 'system', 'sys_hash', 'System User', 'CASHIER')",
+                params![default_user],
+            )?;
+            default_user.to_string()
+        }
+        Err(e) => return Err(PostingError::Database(e)),
+    };
+
+    let tx_id = generate_id(&tx, "tx")?;
+    let price_mode_str = match input.sale.price_mode {
+        PriceMode::Exclusive => "EXCLUSIVE",
+        PriceMode::Inclusive => "INCLUSIVE",
+    };
+
+    // Insert transactions
+    tx.execute(
+        "INSERT INTO transactions (
+            id, status, seller_state_code, place_of_supply_state_code, series,
+            invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+            cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+            transaction_type, original_transaction_id, invoice_date, created_by_user_id,
+            price_mode
+        ) VALUES (
+            ?1, 'POSTED', ?2, ?3, ?4,
+            ?5, ?6, ?7, ?8, ?9,
+            ?10, ?11, ?12, ?13, ?14,
+            'SALE', NULL, ?15, ?16,
+            ?17
+        )",
+        params![
+            &tx_id,
+            &input.sale.seller_state_code,
+            &input.sale.place_of_supply_state_code,
+            &series,
+            &invoice_number,
+            &entity_id,
+            computation.totals.subtotal_paise,
+            computation.totals.discount_paise,
+            computation.totals.taxable_paise,
+            computation.totals.cgst_paise,
+            computation.totals.sgst_paise,
+            computation.totals.igst_paise,
+            computation.totals.round_off_paise,
+            computation.totals.total_amount_paise,
+            &input.sale.invoice_date,
+            &user_id,
+            price_mode_str,
+        ],
+    )?;
+
+    // Insert transaction_items
+    for line in &computation.lines {
+        let item_id = generate_id(&tx, "ti")?;
+        tx.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES (
+                ?1, ?2, ?3, NULL, ?4,
+                ?5, ?6, ?7, ?8,
+                ?9, ?10, ?11, ?12
+            )",
+            params![
+                &item_id,
+                &tx_id,
+                &line.resource_id,
+                line.quantity_milli,
+                line.unit_price_paise,
+                line.discount_paise,
+                line.taxable_paise,
+                line.tax_rate_bps,
+                line.cgst_paise,
+                line.sgst_paise,
+                line.igst_paise,
+                line.line_total_paise,
+            ],
+        )?;
+    }
+
+    // Ledger entries for the sale invoice
+    if computation.totals.total_amount_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_1100', ?3, 0, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.total_amount_paise,
+                format!("Sales Invoice {}", invoice_number),
+            ],
+        )?;
+    }
+
+    if computation.totals.taxable_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_4000', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.taxable_paise,
+                format!("Sales Revenue on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    if computation.totals.cgst_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_2100', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.cgst_paise,
+                format!("Output CGST on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    if computation.totals.sgst_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_2110', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.sgst_paise,
+                format!("Output SGST on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    if computation.totals.igst_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_2120', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.igst_paise,
+                format!("Output IGST on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    if computation.totals.round_off_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_4900', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.round_off_paise,
+                format!("Round off gain on {}", invoice_number),
+            ],
+        )?;
+    } else if computation.totals.round_off_paise < 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_4900', ?3, 0, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.round_off_paise.abs(),
+                format!("Round off loss on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Stock movements & COGS
+    let mut total_cogs_paise: i64 = 0;
+    let mut resource_quantities: HashMap<String, i64> = HashMap::new();
+    for line in &input.sale.lines {
+        let entry = resource_quantities
+            .entry(line.resource_id.clone())
+            .or_insert(0);
+        *entry = entry
+            .checked_add(line.quantity_milli)
+            .ok_or(PostingError::MathOverflow)?;
+    }
+
+    for (resource_id, needed_milli) in resource_quantities {
+        let is_tracked: i64 = match tx.query_row(
+            "SELECT is_stock_tracked FROM resources WHERE id = ?1",
+            params![&resource_id],
+            |r| r.get(0),
+        ) {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Err(PostingError::ResourceNotFound(resource_id));
+            }
+            Err(e) => return Err(PostingError::Database(e)),
+        };
+
+        if is_tracked == 0 {
+            continue;
+        }
+
+        let mut lots_stmt = tx.prepare(
+            "SELECT id FROM resource_lots
+             WHERE resource_id = ?1
+               AND (expiry_date IS NULL OR expiry_date = '' OR expiry_date >= ?2)
+             ORDER BY
+               CASE WHEN expiry_date IS NOT NULL AND expiry_date != '' THEN 0 ELSE 1 END,
+               expiry_date ASC,
+               created_at ASC,
+               id ASC",
+        )?;
+
+        let lot_ids: Vec<String> = lots_stmt
+            .query_map(params![&resource_id, &input.sale.invoice_date], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
+        let mut remaining = needed_milli;
+
+        for lot_id in lot_ids {
+            let available: i64 = tx.query_row(
+                "SELECT COALESCE(SUM(quantity_delta_milli), 0)
+                 FROM stock_movements
+                 WHERE lot_id = ?1",
+                params![&lot_id],
+                |r| r.get(0),
+            )?;
+
+            if available > 0 {
+                let deduct = std::cmp::min(remaining, available);
+                let sm_id = generate_id(&tx, "sm")?;
+
+                tx.execute(
+                    "INSERT INTO stock_movements (
+                        id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli
+                    ) VALUES (?1, ?2, ?3, ?4, 'SALE', ?5)",
+                    params![&sm_id, &resource_id, &lot_id, &tx_id, -deduct,],
+                )?;
+
+                let unit_cost_paise: i64 = {
+                    let lot_cost: Option<i64> = tx
+                        .query_row(
+                            "SELECT cost_price_paise FROM resource_lots WHERE id = ?1",
+                            params![&lot_id],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    match lot_cost {
+                        Some(cost) if cost > 0 => cost,
+                        _ => {
+                            let pur_cost: Option<i64> = tx
+                                .query_row(
+                                    "SELECT ti.unit_price_paise
+                                     FROM transaction_items ti
+                                     JOIN transactions t ON ti.transaction_id = t.id
+                                     WHERE ti.lot_id = ?1 AND t.transaction_type = 'PURCHASE'
+                                     ORDER BY t.created_at DESC LIMIT 1",
+                                    params![&lot_id],
+                                    |r| r.get(0),
+                                )
+                                .optional()?;
+                            match pur_cost {
+                                Some(cost) if cost > 0 => cost,
+                                _ => tx
+                                    .query_row(
+                                        "SELECT cost_price_paise FROM resources WHERE id = ?1",
+                                        params![&resource_id],
+                                        |r| r.get(0),
+                                    )
+                                    .unwrap_or(0),
+                            }
+                        }
+                    }
+                };
+
+                if unit_cost_paise > 0 {
+                    let cost_i128 = round_div_i128(
+                        (deduct as i128)
+                            .checked_mul(unit_cost_paise as i128)
+                            .ok_or(PostingError::MathOverflow)?,
+                        1000,
+                    )?;
+                    let cost_paise =
+                        i64::try_from(cost_i128).map_err(|_| PostingError::MathOverflow)?;
+                    total_cogs_paise = total_cogs_paise
+                        .checked_add(cost_paise)
+                        .ok_or(PostingError::MathOverflow)?;
+                }
+
+                remaining = remaining
+                    .checked_sub(deduct)
+                    .ok_or(PostingError::MathOverflow)?;
+
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+
+        if remaining > 0 {
+            return Err(PostingError::InsufficientStock {
+                resource_id,
+                requested_milli: needed_milli,
+                available_milli: needed_milli - remaining,
+            });
+        }
+    }
+
+    if total_cogs_paise > 0 {
+        let le_cogs_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_5000', ?3, 0, ?4)",
+            params![
+                &le_cogs_id,
+                &tx_id,
+                total_cogs_paise,
+                format!("Cost of Goods Sold for {}", invoice_number),
+            ],
+        )?;
+
+        let le_inv_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_1200', 0, ?3, ?4)",
+            params![
+                &le_inv_id,
+                &tx_id,
+                total_cogs_paise,
+                format!("Inventory deduction for {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Now process payment tenders inside the SAME immediate transaction
+    let mut payment_ids = Vec::with_capacity(input.payments.len());
+
+    for tender in &input.payments {
+        let pay_id = generate_id(&tx, "pay")?;
+        let mode_str = tender.mode.as_str();
+        let (_pay_series, pay_number) = allocate_invoice_number(&tx, "PAY", &input.sale.invoice_date)?;
+
+        tx.execute(
+            "INSERT INTO payments (
+                id, payment_number, entity_id, payment_mode, amount_paise,
+                reference_number, created_by_user_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &pay_id,
+                &pay_number,
+                &entity_id,
+                mode_str,
+                tender.amount_paise,
+                tender.reference_number.as_deref(),
+                &user_id,
+            ],
+        )?;
+
+        let alloc_id = generate_id(&tx, "pa")?;
+        tx.execute(
+            "INSERT INTO payment_allocations (
+                id, payment_id, transaction_id, amount_allocated_paise
+            ) VALUES (?1, ?2, ?3, ?4)",
+            params![&alloc_id, &pay_id, &tx_id, tender.amount_paise,],
+        )?;
+
+        let asset_account_id = match tender.mode {
+            PaymentMode::Cash => "acc_1000",
+            PaymentMode::Upi
+            | PaymentMode::Card
+            | PaymentMode::BankTransfer
+            | PaymentMode::Cheque => "acc_1010",
+        };
+
+        // Debit Cash or Digital Asset account
+        let le_asset_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, NULL, ?2, ?3, ?4, 0, ?5)",
+            params![
+                &le_asset_id,
+                &pay_id,
+                asset_account_id,
+                tender.amount_paise,
+                format!("Receipt via {} for {}", mode_str, invoice_number),
+            ],
+        )?;
+
+        // Credit Accounts Receivable
+        let le_ar_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, NULL, ?2, 'acc_1100', 0, ?3, ?4)",
+            params![
+                &le_ar_id,
+                &pay_id,
+                tender.amount_paise,
+                format!("AR settlement via {} for {}", mode_str, invoice_number),
+            ],
+        )?;
+
+        // Verify payment ledger balance
+        let (p_debit, p_credit): (i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0)
+             FROM ledger_entries
+             WHERE payment_id = ?1",
+            params![&pay_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        if p_debit != p_credit {
+            return Err(PostingError::UnbalancedLedger {
+                debit_paise: p_debit,
+                credit_paise: p_credit,
+            });
+        }
+
+        payment_ids.push(pay_id);
+    }
+
+    // Verify invoice ledger balance
+    let (s_debit, s_credit): (i64, i64) = tx.query_row(
+        "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0)
+         FROM ledger_entries
+         WHERE transaction_id = ?1",
+        params![&tx_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if s_debit != s_credit {
+        return Err(PostingError::UnbalancedLedger {
+            debit_paise: s_debit,
+            credit_paise: s_credit,
+        });
+    }
+
+    // Single atomic commit for invoice + tenders
+    tx.commit()?;
+
+    let posted_sale = PostedSale {
+        transaction_id: tx_id,
+        invoice_number,
+        totals: PostedSaleTotals {
+            subtotal_paise: computation.totals.subtotal_paise,
+            discount_paise: computation.totals.discount_paise,
+            taxable_paise: computation.totals.taxable_paise,
+            cgst_paise: computation.totals.cgst_paise,
+            sgst_paise: computation.totals.sgst_paise,
+            igst_paise: computation.totals.igst_paise,
+            round_off_paise: computation.totals.round_off_paise,
+            total_amount_paise: computation.totals.total_amount_paise,
+        },
+    };
+
+    Ok(PostedSaleWithPayments {
+        sale: posted_sale,
+        payment_ids,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::database::migrations::{MIGRATIONS, run_migrations};
     use crate::database::queries::verify_ledger;
-    use crate::posting::{LineInput, PriceMode};
+    use crate::posting::{LineInput, PaymentTenderInput, PriceMode};
     use std::fs;
 
     fn setup_test_db() -> Connection {
@@ -1284,5 +1901,153 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(exp_bal, 1000, "Expired lot must not be sold");
+    }
+
+    #[test]
+    fn test_23_atomic_sale_with_payments() {
+        let mut conn = setup_test_db();
+
+        let input = SaleWithPaymentsInput {
+            sale: SaleInput {
+                invoice_date: "2026-05-15".to_string(),
+                seller_state_code: "27".to_string(),
+                place_of_supply_state_code: "27".to_string(),
+                customer: Some("ent_cust_1".to_string()),
+                price_mode: PriceMode::Exclusive,
+                lines: vec![LineInput {
+                    resource_id: "res_tracked_1".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 10000,
+                    discount_paise: 0,
+                    tax_rate_bps: 1800,
+                }],
+            },
+            payments: vec![
+                PaymentTenderInput {
+                    mode: PaymentMode::Cash,
+                    amount_paise: 5000,
+                    reference_number: Some("CASH-001".to_string()),
+                },
+                PaymentTenderInput {
+                    mode: PaymentMode::Upi,
+                    amount_paise: 6800,
+                    reference_number: Some("UPI-TXN-999".to_string()),
+                },
+            ],
+        };
+
+        let result = post_sale_with_payments(&mut conn, &input).expect("Atomic sale + payments must succeed");
+        assert_eq!(result.sale.totals.total_amount_paise, 11800);
+        assert_eq!(result.payment_ids.len(), 2);
+
+        // Verify allocations
+        let alloc_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM payment_allocations WHERE transaction_id = ?1",
+            params![&result.sale.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(alloc_count, 2);
+
+        // Verify ledger balance globally
+        let disc = verify_ledger(&conn).unwrap();
+        assert!(disc.is_empty(), "Ledger must be completely balanced: {:?}", disc);
+    }
+
+    #[test]
+    fn test_24_price_mode_persistence() {
+        let mut conn = setup_test_db();
+
+        // 1. Post exclusive sale
+        let s_excl = post_sale(&mut conn, &SaleInput {
+            invoice_date: "2026-05-16".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        }).unwrap();
+
+        let mode_excl: String = conn.query_row(
+            "SELECT price_mode FROM transactions WHERE id = ?1",
+            params![&s_excl.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(mode_excl, "EXCLUSIVE");
+
+        // 2. Post inclusive sale
+        let s_incl = post_sale(&mut conn, &SaleInput {
+            invoice_date: "2026-05-16".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Inclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 11800,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        }).unwrap();
+
+        let mode_incl: String = conn.query_row(
+            "SELECT price_mode FROM transactions WHERE id = ?1",
+            params![&s_incl.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(mode_incl, "INCLUSIVE");
+    }
+
+    #[test]
+    fn test_25_lot_level_cost_cogs() {
+        let mut conn = setup_test_db();
+
+        // Resource has fallback master cost 4000 (₹40.00)
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, cost_price_paise, is_stock_tracked)
+             VALUES ('res_batch', 'SKU-BATCH', 'Batch Item', '1234', 0, 10000, 4000, 1)",
+            [],
+        ).unwrap();
+
+        // Lot A cost is 7500 (₹75.00)
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise, cost_price_paise)
+             VALUES ('lot_a', 'res_batch', 'BATCH-A', '2028-12-31', 10000, 7500)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_ba', 'res_batch', 'lot_a', NULL, 'PURCHASE', 1000)",
+            [],
+        ).unwrap();
+
+        let sale = post_sale(&mut conn, &SaleInput {
+            invoice_date: "2026-05-18".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_batch".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        }).unwrap();
+
+        // COGS should be 7500 (from lot_a), not 4000 (from resource master)!
+        let cogs: i64 = conn.query_row(
+            "SELECT debit_paise FROM ledger_entries WHERE transaction_id = ?1 AND account_id = 'acc_5000'",
+            params![&sale.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(cogs, 7500, "COGS must use lot-specific cost_price_paise");
     }
 }
