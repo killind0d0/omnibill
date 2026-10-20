@@ -9,6 +9,7 @@ use std::path::Path;
 /// - synchronous = FULL
 /// - foreign_keys = ON
 /// - busy_timeout = 5000
+/// - recursive_triggers = ON
 pub fn open_connection<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let conn = Connection::open(path)?;
     apply_pragmas(&conn)?;
@@ -21,7 +22,8 @@ pub fn apply_pragmas(conn: &Connection) -> Result<()> {
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = FULL;
          PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;",
+         PRAGMA busy_timeout = 5000;
+         PRAGMA recursive_triggers = ON;",
     )?;
     Ok(())
 }
@@ -149,6 +151,12 @@ mod tests {
             .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
             .unwrap();
         assert_eq!(busy_timeout, 5000, "busy_timeout must be 5000 ms");
+
+        // 5. recursive_triggers = ON (represented as integer 1)
+        let recursive_triggers: i64 = conn
+            .query_row("PRAGMA recursive_triggers", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(recursive_triggers, 1, "recursive_triggers must be ON (1)");
 
         drop(conn);
         let _ = fs::remove_file(&db_path);
@@ -1367,6 +1375,23 @@ mod tests {
                 "Column '{}' of transactions table must appear in trg_transactions_update_guard SQL",
                 col
             );
+            if col == "status" {
+                assert!(
+                    trigger_sql.contains("OLD.status = 'POSTED'"),
+                    "Trigger SQL must contain OLD.status = 'POSTED'"
+                );
+                assert!(
+                    trigger_sql.contains("NEW.status = 'CANCELLED'"),
+                    "Trigger SQL must contain NEW.status = 'CANCELLED'"
+                );
+            } else {
+                let exact_text = format!("OLD.{} IS NEW.{}", col, col);
+                assert!(
+                    trigger_sql.contains(&exact_text),
+                    "Trigger SQL must contain exact text '{}'",
+                    exact_text
+                );
+            }
         }
 
         // 2. Control insert
@@ -1573,6 +1598,16 @@ mod tests {
                 .unwrap();
             assert_eq!(row.0, name, "Account name mismatch for code {}", code);
             assert_eq!(row.1, acct_type, "Account type mismatch for code {}", code);
+
+            let code_fmt: (i64, i64) = conn
+                .query_row(
+                    "SELECT length(code), (code GLOB '[0-9][0-9][0-9][0-9]') FROM accounts WHERE code = ?1",
+                    params![code],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(code_fmt.0, 4, "length(code) must be 4 for account {}", code);
+            assert_eq!(code_fmt.1, 1, "code GLOB '[0-9][0-9][0-9][0-9]' must be 1 for account {}", code);
         }
 
         let initial_count: i64 = conn
@@ -1586,6 +1621,24 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM accounts WHERE code IN ('1000','1010','1100','1200','2100','2110','2120','4000','4010','4900')", [], |r| r.get(0))
             .unwrap();
         assert_eq!(second_count, 10);
+
+        let mut print_stmt = conn
+            .prepare("SELECT code, length(code), typeof(code), hex(code) FROM accounts ORDER BY code")
+            .unwrap();
+        let print_rows = print_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap();
+        for r in print_rows {
+            let (code, len, typ, hx) = r.unwrap();
+            println!("{}|{}|{}|{}", code, len, typ, hx);
+        }
     }
 
     // 30. accounts guard: type change blocked after entries exist, allowed before
@@ -1716,5 +1769,260 @@ mod tests {
 
         // Assert user_version remains 99 and unchanged
         assert_eq!(get_user_version(&conn).unwrap(), 99);
+    }
+
+    // 33. REPLACE cannot bypass immutability across all append-only and guarded tables
+    #[test]
+    fn test_33_replace_cannot_bypass_immutability() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // 1. transactions
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES (
+                'tx_rep_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
+                1000, 0, 1000, 0, 0, 0, 0, 1000,
+                'SALE', NULL, '2026-10-20', 'usr_1'
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_tx_rep = conn.execute(
+            "INSERT OR REPLACE INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES (
+                'tx_rep_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
+                2000, 0, 2000, 0, 0, 0, 0, 2000,
+                'SALE', NULL, '2026-10-20', 'usr_1'
+            )",
+            [],
+        );
+        assert!(fail_tx_rep.is_err());
+        assert!(fail_tx_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let tx_tot: i64 = conn.query_row("SELECT total_amount_paise FROM transactions WHERE id = 'tx_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(tx_tot, 1000);
+
+        // 2. transaction_items
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES (
+                'ti_rep_1', 'tx_rep_1', 'res_1', NULL, 1000,
+                1000, 0, 1000, 0,
+                0, 0, 0, 1000
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_ti_rep = conn.execute(
+            "INSERT OR REPLACE INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES (
+                'ti_rep_1', 'tx_rep_1', 'res_1', NULL, 2000,
+                1000, 0, 2000, 0,
+                0, 0, 0, 2000
+            )",
+            [],
+        );
+        assert!(fail_ti_rep.is_err());
+        assert!(fail_ti_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let ti_qty: i64 = conn.query_row("SELECT quantity_milli FROM transaction_items WHERE id = 'ti_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ti_qty, 1000);
+
+        // 3. stock_movements
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO stock_movements (
+                id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli
+            ) VALUES (
+                'sm_rep_1', 'res_1', NULL, 'tx_rep_1', 'SALE', -1000
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_sm_rep = conn.execute(
+            "INSERT OR REPLACE INTO stock_movements (
+                id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli
+            ) VALUES (
+                'sm_rep_1', 'res_1', NULL, 'tx_rep_1', 'SALE', -2000
+            )",
+            [],
+        );
+        assert!(fail_sm_rep.is_err());
+        assert!(fail_sm_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let sm_qty: i64 = conn.query_row("SELECT quantity_delta_milli FROM stock_movements WHERE id = 'sm_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(sm_qty, -1000);
+
+        // 4. ledger_entries
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (
+                'le_rep_1', 'tx_rep_1', NULL, 'acc_ar', 1000, 0, 'Control entry'
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_le_rep = conn.execute(
+            "INSERT OR REPLACE INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (
+                'le_rep_1', 'tx_rep_1', NULL, 'acc_ar', 2000, 0, 'Control entry'
+            )",
+            [],
+        );
+        assert!(fail_le_rep.is_err());
+        assert!(fail_le_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let le_dbt: i64 = conn.query_row("SELECT debit_paise FROM ledger_entries WHERE id = 'le_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(le_dbt, 1000);
+
+        // 5. payments
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO payments (
+                id, payment_number, entity_id, payment_mode, amount_paise, created_by_user_id
+            ) VALUES (
+                'pay_rep_1', 'PAY/26-27/0001', 'ent_1', 'CASH', 1000, 'usr_1'
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_pay_rep = conn.execute(
+            "INSERT OR REPLACE INTO payments (
+                id, payment_number, entity_id, payment_mode, amount_paise, created_by_user_id
+            ) VALUES (
+                'pay_rep_1', 'PAY/26-27/0001', 'ent_1', 'CASH', 2000, 'usr_1'
+            )",
+            [],
+        );
+        assert!(fail_pay_rep.is_err());
+        assert!(fail_pay_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let pay_amt: i64 = conn.query_row("SELECT amount_paise FROM payments WHERE id = 'pay_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(pay_amt, 1000);
+
+        // 6. payment_allocations
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO payment_allocations (
+                id, payment_id, transaction_id, amount_allocated_paise
+            ) VALUES (
+                'pa_rep_1', 'pay_rep_1', 'tx_rep_1', 1000
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_pa_rep = conn.execute(
+            "INSERT OR REPLACE INTO payment_allocations (
+                id, payment_id, transaction_id, amount_allocated_paise
+            ) VALUES (
+                'pa_rep_1', 'pay_rep_1', 'tx_rep_1', 2000
+            )",
+            [],
+        );
+        assert!(fail_pa_rep.is_err());
+        assert!(fail_pa_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let pa_amt: i64 = conn.query_row("SELECT amount_allocated_paise FROM payment_allocations WHERE id = 'pa_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(pa_amt, 1000);
+
+        // 7. number_series
+        // (a) Insert valid control row
+        conn.execute(
+            "INSERT INTO number_series (
+                id, series_code, financial_year, prefix, next_number, padding, is_active
+            ) VALUES (
+                'ns_rep_1', 'REP_SER', '2026-2027', 'REP/', 10, 4, 1
+            )",
+            [],
+        ).unwrap();
+
+        // (b) INSERT OR REPLACE with same PK and changed value fails
+        let fail_ns_rep = conn.execute(
+            "INSERT OR REPLACE INTO number_series (
+                id, series_code, financial_year, prefix, next_number, padding, is_active
+            ) VALUES (
+                'ns_rep_1', 'REP_SER', '2026-2027', 'REP/', 11, 4, 1
+            )",
+            [],
+        );
+        assert!(fail_ns_rep.is_err());
+        assert!(fail_ns_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (c) Original row is unchanged
+        let ns_num: i64 = conn.query_row("SELECT next_number FROM number_series WHERE id = 'ns_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ns_num, 10);
+
+        // --- Replace-by-unique-key attacks ---
+
+        // (i) number_series: INSERT OR REPLACE with new id but same (series_code, financial_year) and next_number = 1
+        let fail_ns_attack = conn.execute(
+            "INSERT OR REPLACE INTO number_series (
+                id, series_code, financial_year, prefix, next_number, padding, is_active
+            ) VALUES (
+                'ns_rep_attack', 'REP_SER', '2026-2027', 'REP/', 1, 4, 1
+            )",
+            [],
+        );
+        assert!(fail_ns_attack.is_err());
+        assert!(fail_ns_attack.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        let orig_ns_num: i64 = conn.query_row("SELECT next_number FROM number_series WHERE id = 'ns_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(orig_ns_num, 10);
+        let ns_attack_count: i64 = conn.query_row("SELECT COUNT(*) FROM number_series WHERE id = 'ns_rep_attack'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ns_attack_count, 0);
+
+        // (ii) transactions: INSERT OR REPLACE with new id but same invoice_number
+        let fail_tx_attack = conn.execute(
+            "INSERT OR REPLACE INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES (
+                'tx_rep_attack', 'POSTED', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
+                5000, 0, 5000, 0, 0, 0, 0, 5000,
+                'SALE', NULL, '2026-10-20', 'usr_1'
+            )",
+            [],
+        );
+        assert!(fail_tx_attack.is_err());
+        assert!(fail_tx_attack.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        let orig_tx_tot: i64 = conn.query_row("SELECT total_amount_paise FROM transactions WHERE id = 'tx_rep_1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(orig_tx_tot, 1000);
+        let tx_attack_count: i64 = conn.query_row("SELECT COUNT(*) FROM transactions WHERE id = 'tx_rep_attack'", [], |r| r.get(0)).unwrap();
+        assert_eq!(tx_attack_count, 0);
     }
 }

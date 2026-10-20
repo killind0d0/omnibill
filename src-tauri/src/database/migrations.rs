@@ -480,6 +480,7 @@ END;
 /// Hardened behaviors:
 /// (a) Returns Err and changes nothing if database user_version is higher than the highest version in the slice.
 /// (b) Begins each migration with TransactionBehavior::Immediate and re-reads user_version inside that transaction.
+/// Not covered by a unit test; protects against concurrent access, which is not expected in the single-user MVP.
 pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result<()> {
     let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 

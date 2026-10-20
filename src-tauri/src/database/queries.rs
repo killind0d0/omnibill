@@ -62,6 +62,7 @@ impl std::fmt::Display for LedgerDiscrepancy {
 /// Performs an internal consistency audit of the general ledger and posted transactions.
 ///
 /// All checks run inside a single read transaction to guarantee a point-in-time snapshot.
+/// Not covered by a unit test; protects against concurrent access, which is not expected in the single-user MVP.
 ///
 /// What is checked:
 /// 1. Transaction-level balance: SUM(debit_paise) == SUM(credit_paise) for every transaction_id in ledger_entries.
