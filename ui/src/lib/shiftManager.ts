@@ -28,8 +28,12 @@ export interface ShiftRecord {
   card_sales_paise: number;
   other_sales_paise: number;
   cash_refunds_paise: number;
+  upi_refunds_paise: number;
+  card_refunds_paise: number;
+  cash_in_paise: number;
   petty_cash_expenses_paise: number;
   total_bills_count: number;
+  no_sale_count: number;
   
   // Settlement fields (calculated at closing)
   expected_cash_paise: number;
@@ -109,8 +113,12 @@ export class ShiftManager {
       card_sales_paise: 0,
       other_sales_paise: 0,
       cash_refunds_paise: 0,
+      upi_refunds_paise: 0,
+      card_refunds_paise: 0,
+      cash_in_paise: 0,
       petty_cash_expenses_paise: 0,
       total_bills_count: 0,
+      no_sale_count: 0,
       expected_cash_paise: Math.max(0, openingFloatPaise),
       actual_cash_paise: 0,
       variance_paise: 0,
@@ -130,8 +138,16 @@ export class ShiftManager {
     if (!this.currentShift || this.currentShift.status !== 'OPEN') return;
 
     if (isRefund) {
-      if (paymentMode === 'CASH') {
-        this.currentShift.cash_refunds_paise += amountPaise;
+      switch (paymentMode) {
+        case 'CASH':
+          this.currentShift.cash_refunds_paise += amountPaise;
+          break;
+        case 'UPI':
+          this.currentShift.upi_refunds_paise = (this.currentShift.upi_refunds_paise || 0) + amountPaise;
+          break;
+        case 'CARD':
+          this.currentShift.card_refunds_paise = (this.currentShift.card_refunds_paise || 0) + amountPaise;
+          break;
       }
     } else {
       this.currentShift.total_bills_count += 1;
@@ -151,22 +167,35 @@ export class ShiftManager {
       }
     }
 
-    // Recalculate expected cash
-    this.currentShift.expected_cash_paise =
-      this.currentShift.opening_float_paise +
-      this.currentShift.cash_sales_paise -
-      this.currentShift.cash_refunds_paise -
-      this.currentShift.petty_cash_expenses_paise;
-
-    this.saveState();
+    this.recalculateExpectedCash();
   }
 
   // Record petty cash expense or cash drop
   public recordPettyCash(amountPaise: number): void {
     if (!this.currentShift || this.currentShift.status !== 'OPEN') return;
     this.currentShift.petty_cash_expenses_paise += amountPaise;
+    this.recalculateExpectedCash();
+  }
+
+  // Record cash-in / float top up
+  public recordCashIn(amountPaise: number): void {
+    if (!this.currentShift || this.currentShift.status !== 'OPEN') return;
+    this.currentShift.cash_in_paise = (this.currentShift.cash_in_paise || 0) + amountPaise;
+    this.recalculateExpectedCash();
+  }
+
+  // Record no-sale drawer opening
+  public recordNoSale(): void {
+    if (!this.currentShift || this.currentShift.status !== 'OPEN') return;
+    this.currentShift.no_sale_count = (this.currentShift.no_sale_count || 0) + 1;
+    this.saveState();
+  }
+
+  private recalculateExpectedCash(): void {
+    if (!this.currentShift) return;
     this.currentShift.expected_cash_paise =
       this.currentShift.opening_float_paise +
+      (this.currentShift.cash_in_paise || 0) +
       this.currentShift.cash_sales_paise -
       this.currentShift.cash_refunds_paise -
       this.currentShift.petty_cash_expenses_paise;

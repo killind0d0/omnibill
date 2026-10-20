@@ -684,7 +684,14 @@ pub fn get_gstr1_summary(
             add_invoice_to_category(&mut b2b, entry)?;
         } else {
             let is_inter_state = seller_state != pos_state;
-            if is_inter_state && total > 25_000_000 {
+            // Notification No. 12/2024 – Central Tax: Effective 2024-08-01, B2C Large invoice threshold
+            // was reduced from ₹2.5 Lakh (25,000,000 paise) to ₹1.0 Lakh (10,000,000 paise).
+            let b2c_large_threshold = if entry.invoice_date.as_str() >= "2024-08-01" {
+                10_000_000
+            } else {
+                25_000_000
+            };
+            if is_inter_state && total > b2c_large_threshold {
                 add_invoice_to_category(&mut b2c_large, entry)?;
             } else {
                 add_invoice_to_category(&mut b2c_small, entry)?;
@@ -1637,5 +1644,64 @@ mod tests {
             stock_report.total_valuation,
             stock_report.total_valuation_paise
         );
+    }
+
+    #[test]
+    fn test_gstr1_notification_12_2024_date_effective_threshold() {
+        let mut conn = setup_test_environment();
+
+        // Seed a high-value resource: ₹150,000 taxable (15,000,000 paise) + 18% IGST = ₹177,000 (17,700,000 paise)
+        // This is between the old ₹2.5L limit and new ₹1.0L limit.
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, cost_price_paise, is_stock_tracked)
+             VALUES ('res_mid_large', 'SKU-MID', 'Mid Value Equipment', '8471', 1800, 15000000, 10000000, 0)",
+            [],
+        ).unwrap();
+
+        // 1. Sale before August 1, 2024: 2024-07-25 (old ₹2.5L threshold applies) -> Must be B2C Small
+        post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2024-07-25".to_string(),
+                seller_state_code: "27".to_string(),
+                place_of_supply_state_code: "29".to_string(), // Inter-state
+                customer: Some("ent_b2c_inter".to_string()),
+                price_mode: PriceMode::Exclusive,
+                lines: vec![LineInput {
+                    resource_id: "res_mid_large".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 15000000,
+                    discount_paise: 0,
+                    tax_rate_bps: 1800,
+                }],
+            },
+        ).expect("Post July 2024 sale");
+
+        let july_gstr1 = get_gstr1_summary(&conn, "2024-25", Some(7)).expect("July GSTR-1");
+        assert_eq!(july_gstr1.b2c_large.len(), 0, "July 2024 (< ₹2.5L) must NOT be B2C Large");
+        assert_eq!(july_gstr1.b2c_small.len(), 1, "July 2024 (< ₹2.5L) must be B2C Small");
+
+        // 2. Sale on/after August 1, 2024: 2024-08-05 (new ₹1.0L threshold applies under Notif 12/2024) -> Must be B2C Large
+        post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2024-08-05".to_string(),
+                seller_state_code: "27".to_string(),
+                place_of_supply_state_code: "29".to_string(), // Inter-state
+                customer: Some("ent_b2c_inter".to_string()),
+                price_mode: PriceMode::Exclusive,
+                lines: vec![LineInput {
+                    resource_id: "res_mid_large".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 15000000,
+                    discount_paise: 0,
+                    tax_rate_bps: 1800,
+                }],
+            },
+        ).expect("Post August 2024 sale");
+
+        let aug_gstr1 = get_gstr1_summary(&conn, "2024-25", Some(8)).expect("August GSTR-1");
+        assert_eq!(aug_gstr1.b2c_large.len(), 1, "August 2024 (> ₹1.0L) must be B2C Large under Notification 12/2024");
+        assert_eq!(aug_gstr1.b2c_small.len(), 0, "August 2024 must NOT be B2C Small");
     }
 }

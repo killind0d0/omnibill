@@ -1,7 +1,7 @@
 use super::series::allocate_invoice_number;
-use super::tax::compute_sale;
+use super::tax::{compute_sale, round_div_i128};
 use super::{LineInput, PostedSaleTotals, PostingError, PriceMode, SaleInput};
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -432,6 +432,8 @@ pub fn post_sale_return(
     }
 
     // 7. Stock restoration for stock-tracked resources
+    let mut total_restored_cost_paise: i64 = 0;
+
     for (resource_id, needed_milli) in requested_per_resource {
         let is_tracked: i64 = match tx.query_row(
             "SELECT is_stock_tracked FROM resources WHERE id = ?1",
@@ -505,6 +507,45 @@ pub fn post_sale_return(
                 params![&sm_id, &resource_id, &lot_id, &tx_id, restore],
             )?;
 
+            // Reconcile restored lot cost for COGS reversal
+            let unit_cost_paise: i64 = {
+                let pur_cost: Option<i64> = tx
+                    .query_row(
+                        "SELECT ti.unit_price_paise
+                         FROM transaction_items ti
+                         JOIN transactions t ON ti.transaction_id = t.id
+                         WHERE ti.lot_id = ?1 AND t.transaction_type = 'PURCHASE'
+                         ORDER BY t.created_at DESC LIMIT 1",
+                        params![&lot_id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                match pur_cost {
+                    Some(cost) if cost > 0 => cost,
+                    _ => tx
+                        .query_row(
+                            "SELECT cost_price_paise FROM resources WHERE id = ?1",
+                            params![&resource_id],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0),
+                }
+            };
+
+            if unit_cost_paise > 0 {
+                let cost_i128 = round_div_i128(
+                    (restore as i128)
+                        .checked_mul(unit_cost_paise as i128)
+                        .ok_or(PostingError::MathOverflow)?,
+                    1000,
+                )?;
+                let lot_cost_paise =
+                    i64::try_from(cost_i128).map_err(|_| PostingError::MathOverflow)?;
+                total_restored_cost_paise = total_restored_cost_paise
+                    .checked_add(lot_cost_paise)
+                    .ok_or(PostingError::MathOverflow)?;
+            }
+
             remaining = remaining
                 .checked_sub(restore)
                 .ok_or(PostingError::MathOverflow)?;
@@ -517,6 +558,37 @@ pub fn post_sale_return(
                 remaining, resource_id
             )));
         }
+    }
+
+    // 8. Reversal of Cost of Goods Sold (COGS) & Inventory Asset restoration
+    if total_restored_cost_paise > 0 {
+        // Debit Inventory Asset (acc_1200)
+        let le_inv_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_1200', ?3, 0, ?4)",
+            params![
+                &le_inv_id,
+                &tx_id,
+                total_restored_cost_paise,
+                format!("Inventory restored for return {}", invoice_number),
+            ],
+        )?;
+
+        // Credit Cost of Goods Sold (acc_5000)
+        let le_cogs_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_5000', 0, ?3, ?4)",
+            params![
+                &le_cogs_id,
+                &tx_id,
+                total_restored_cost_paise,
+                format!("COGS reversal for return {}", invoice_number),
+            ],
+        )?;
     }
 
     tx.commit()?;

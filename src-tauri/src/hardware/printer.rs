@@ -411,8 +411,8 @@ pub const CMD_CUT_FULL: &[u8] = b"\x1dV\x00";
 /// Partial paper cut command: `\x1dV\x01`
 pub const CMD_CUT_PARTIAL: &[u8] = b"\x1dV\x01";
 
-/// Cash drawer kick pulse: `\x1bp\x00\x19\xfa`
-pub const CMD_DRAWER_KICK: &[u8] = b"\x1bp\x00\x19\xfa";
+/// Cash drawer kick pulse: `\x1bp\x00\x19\x32` (pin 2, 50ms ON / 100ms OFF in 2ms units)
+pub const CMD_DRAWER_KICK: &[u8] = b"\x1bp\x00\x19\x32";
 
 /// ESC/POS text alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1147,8 +1147,8 @@ mod tests {
     #[test]
     fn test_cash_drawer_kick_command() {
         let kick = cash_drawer_kick();
-        assert_eq!(kick, &[0x1b, 0x70, 0x00, 0x19, 0xfa]);
-        assert_eq!(CMD_DRAWER_KICK, &[0x1b, 0x70, 0x00, 0x19, 0xfa]);
+        assert_eq!(kick, &[0x1b, 0x70, 0x00, 0x19, 0x32]);
+        assert_eq!(CMD_DRAWER_KICK, &[0x1b, 0x70, 0x00, 0x19, 0x32]);
     }
 
     #[test]

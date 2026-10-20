@@ -420,6 +420,7 @@ INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_2120', '2120'
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_4000', '4000', 'Sales Revenue', 'REVENUE');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_4010', '4010', 'Sales Returns', 'REVENUE');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_4900', '4900', 'Round Off', 'EXPENSE');
+INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_5000', '5000', 'Cost of Goods Sold', 'EXPENSE');
 
 -- ============================================================================
 -- 5. ACCOUNTS GUARD TRIGGER

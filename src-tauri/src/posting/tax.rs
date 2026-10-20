@@ -594,4 +594,61 @@ mod tests {
             PostingError::InvalidTaxRate(10001)
         ));
     }
+
+    // Test 11 protects: 0.25% (25 bps) odd basis points GST rate without integer truncation.
+    #[test]
+    fn test_11_odd_basis_points_quarter_percent_tax() {
+        let line = LineInput {
+            resource_id: "res_diamond".to_string(),
+            quantity_milli: 10000, // 10 units
+            unit_price_paise: 200000, // ₹2,000.00 each
+            discount_paise: 0,
+            tax_rate_bps: 25, // 0.25% GST rate (precious stones/rough diamonds)
+        };
+
+        // Intra-state supply: CGST (0.125%) and SGST (0.125%)
+        let comp = compute_line(&line, PriceMode::Exclusive, true).unwrap();
+        assert_eq!(comp.taxable_paise, 2000000); // ₹20,000.00
+        assert_eq!(comp.cgst_paise, 2500); // ₹25.00 (exact, zero truncation of 25 bps!)
+        assert_eq!(comp.sgst_paise, 2500); // ₹25.00
+        assert_eq!(comp.igst_paise, 0);
+        assert_eq!(comp.line_total_paise, 2005000); // ₹20,050.00
+
+        // Inter-state supply: IGST 0.25%
+        let comp_inter = compute_line(&line, PriceMode::Exclusive, false).unwrap();
+        assert_eq!(comp_inter.taxable_paise, 2000000);
+        assert_eq!(comp_inter.cgst_paise, 0);
+        assert_eq!(comp_inter.sgst_paise, 0);
+        assert_eq!(comp_inter.igst_paise, 5000); // ₹50.00
+        assert_eq!(comp_inter.line_total_paise, 2005000);
+    }
+
+    // Test 12 protects: Inclusive pricing property (taxable + tax within 1 paisa of MRP base).
+    #[test]
+    fn test_12_tax_inclusive_mrp_back_calculation_property() {
+        let test_prices = [1000, 29900, 49900, 99900, 150000]; // ₹10, ₹299, ₹499, ₹999, ₹1,500
+        let test_rates = [0, 25, 500, 1200, 1800, 2800];
+
+        for &price in &test_prices {
+            for &rate in &test_rates {
+                let line = LineInput {
+                    resource_id: "res_item".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: price,
+                    discount_paise: 0,
+                    tax_rate_bps: rate,
+                };
+
+                let comp = compute_line(&line, PriceMode::Inclusive, true).unwrap();
+                let sum_tax = comp.cgst_paise + comp.sgst_paise;
+                let calculated_total = comp.taxable_paise + sum_tax;
+                let diff = (calculated_total - price).abs();
+                assert!(
+                    diff <= 1,
+                    "Inclusive taxable + tax must be within 1 paisa of MRP {} (got taxable={}, tax={}, rate={})",
+                    price, comp.taxable_paise, sum_tax, rate
+                );
+            }
+        }
+    }
 }

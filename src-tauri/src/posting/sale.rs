@@ -1,7 +1,7 @@
 use super::series::allocate_invoice_number;
-use super::tax::compute_sale;
+use super::tax::{compute_sale, round_div_i128};
 use super::{PostedSale, PostedSaleTotals, PostingError, SaleInput};
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::collections::HashMap;
 
 /// Helper to generate a unique lowercase hex ID prefixed with `prefix`.
@@ -44,15 +44,19 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
     // Resolve customer entity
     let entity_id = match &input.customer {
         Some(cid) => {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM entities WHERE id = ?1",
-                params![cid],
-                |r| r.get(0),
-            )?;
-            if exists == 0 {
-                return Err(PostingError::ResourceNotFound(format!("Entity {}", cid)));
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM entities WHERE id = ?1 OR phone = ?1 LIMIT 1",
+                    params![cid],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match existing {
+                Some(id) => id,
+                None => {
+                    return Err(PostingError::ResourceNotFound(format!("Entity {}", cid)));
+                }
             }
-            cid.clone()
         }
         None => {
             let default_id = "ent_walk_in";
@@ -262,7 +266,9 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
         )?;
     }
 
-    // 5. Stock Movements (FIFO across resource_lots)
+    // 5. Stock Movements (FEFO/FIFO across resource_lots) and Cost of Goods Sold (COGS)
+    let mut total_cogs_paise: i64 = 0;
+
     // Aggregate quantities needed per resource
     let mut resource_quantities: HashMap<String, i64> = HashMap::new();
     for line in &input.lines {
@@ -292,15 +298,21 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
             continue;
         }
 
-        // Fetch lots in FIFO order (oldest created_at first)
+        // Fetch lots in FEFO order (earliest expiry first, falling back to FIFO by created_at)
+        // Lots that have already expired before the sale invoice_date are excluded from deduction.
         let mut lots_stmt = tx.prepare(
             "SELECT id FROM resource_lots
              WHERE resource_id = ?1
-             ORDER BY created_at ASC, id ASC",
+               AND (expiry_date IS NULL OR expiry_date = '' OR expiry_date >= ?2)
+             ORDER BY
+               CASE WHEN expiry_date IS NOT NULL AND expiry_date != '' THEN 0 ELSE 1 END,
+               expiry_date ASC,
+               created_at ASC,
+               id ASC",
         )?;
 
         let lot_ids: Vec<String> = lots_stmt
-            .query_map(params![&resource_id], |r| r.get(0))?
+            .query_map(params![&resource_id, &input.invoice_date], |r| r.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
 
         let mut remaining = needed_milli;
@@ -325,6 +337,45 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
                     params![&sm_id, &resource_id, &lot_id, &tx_id, -deduct,],
                 )?;
 
+                // Calculate COGS for this lot deduction
+                let unit_cost_paise: i64 = {
+                    let pur_cost: Option<i64> = tx
+                        .query_row(
+                            "SELECT ti.unit_price_paise
+                             FROM transaction_items ti
+                             JOIN transactions t ON ti.transaction_id = t.id
+                             WHERE ti.lot_id = ?1 AND t.transaction_type = 'PURCHASE'
+                             ORDER BY t.created_at DESC LIMIT 1",
+                            params![&lot_id],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    match pur_cost {
+                        Some(cost) if cost > 0 => cost,
+                        _ => tx
+                            .query_row(
+                                "SELECT cost_price_paise FROM resources WHERE id = ?1",
+                                params![&resource_id],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(0),
+                    }
+                };
+
+                if unit_cost_paise > 0 {
+                    let cost_i128 = round_div_i128(
+                        (deduct as i128)
+                            .checked_mul(unit_cost_paise as i128)
+                            .ok_or(PostingError::MathOverflow)?,
+                        1000,
+                    )?;
+                    let lot_cost_paise =
+                        i64::try_from(cost_i128).map_err(|_| PostingError::MathOverflow)?;
+                    total_cogs_paise = total_cogs_paise
+                        .checked_add(lot_cost_paise)
+                        .ok_or(PostingError::MathOverflow)?;
+                }
+
                 remaining = remaining
                     .checked_sub(deduct)
                     .ok_or(PostingError::MathOverflow)?;
@@ -342,6 +393,37 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
                 available_milli: needed_milli - remaining,
             });
         }
+    }
+
+    // 5b. Post Cost of Goods Sold (COGS) & Inventory adjustments
+    if total_cogs_paise > 0 {
+        // Debit Cost of Goods Sold (acc_5000)
+        let le_cogs_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_5000', ?3, 0, ?4)",
+            params![
+                &le_cogs_id,
+                &tx_id,
+                total_cogs_paise,
+                format!("Cost of Goods Sold for {}", invoice_number),
+            ],
+        )?;
+
+        // Credit Inventory Asset (acc_1200)
+        let le_inv_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_1200', 0, ?3, ?4)",
+            params![
+                &le_inv_id,
+                &tx_id,
+                total_cogs_paise,
+                format!("Inventory deduction for {}", invoice_number),
+            ],
+        )?;
     }
 
     // 6. Commit transaction
@@ -1059,5 +1141,148 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_21_cogs_and_inventory_posting() {
+        let mut conn = setup_test_db();
+
+        // Create tracked resource with cost_price_paise = 6000 (₹60.00)
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, cost_price_paise, is_stock_tracked)
+             VALUES ('res_cogs', 'COGS-01', 'COGS Item', '1234', 0, 10000, 6000, 1)",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, mrp_paise)
+             VALUES ('lot_cogs_1', 'res_cogs', 'B-01', 10000)",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_cogs_init', 'res_cogs', 'lot_cogs_1', NULL, 'PURCHASE', 5000)",
+            [],
+        ).unwrap();
+
+        let input = SaleInput {
+            invoice_date: "2026-05-10".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_cogs".to_string(),
+                quantity_milli: 2000, // 2 units
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+
+        let sale = post_sale(&mut conn, &input).unwrap();
+        assert_eq!(sale.totals.total_amount_paise, 20000);
+
+        // Verify COGS entry: 2 units * ₹60.00 = 12000 paise
+        let cogs_debit: i64 = conn.query_row(
+            "SELECT debit_paise FROM ledger_entries WHERE transaction_id = ?1 AND account_id = 'acc_5000'",
+            params![&sale.transaction_id],
+            |r| r.get(0),
+        ).expect("COGS debit entry must exist");
+        assert_eq!(cogs_debit, 12000);
+
+        let inv_credit: i64 = conn.query_row(
+            "SELECT credit_paise FROM ledger_entries WHERE transaction_id = ?1 AND account_id = 'acc_1200'",
+            params![&sale.transaction_id],
+            |r| r.get(0),
+        ).expect("Inventory credit entry must exist");
+        assert_eq!(inv_credit, 12000);
+
+        // Verify ledger consistency
+        let disc = crate::database::queries::verify_ledger(&conn).unwrap();
+        assert!(disc.is_empty(), "Ledger must be balanced after COGS posting: {:?}", disc);
+    }
+
+    #[test]
+    fn test_22_fefo_expiry_order_and_expired_batch_rejection() {
+        let mut conn = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, cost_price_paise, is_stock_tracked)
+             VALUES ('res_fefo', 'FEFO-MED', 'Medicine Paracetamol', '3004', 0, 5000, 2500, 1)",
+            [],
+        ).unwrap();
+
+        // Lot 1: Expired on 2026-03-31
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
+             VALUES ('lot_exp', 'res_fefo', 'BATCH-EXP', '2026-03-31', 5000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_fefo_1', 'res_fefo', 'lot_exp', NULL, 'PURCHASE', 1000)",
+            [],
+        ).unwrap();
+
+        // Lot 2: Expires soon on 2026-06-30
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
+             VALUES ('lot_soon', 'res_fefo', 'BATCH-SOON', '2026-06-30', 5000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_fefo_2', 'res_fefo', 'lot_soon', NULL, 'PURCHASE', 1000)",
+            [],
+        ).unwrap();
+
+        // Lot 3: Expires later on 2026-12-31
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
+             VALUES ('lot_later', 'res_fefo', 'BATCH-LATER', '2026-12-31', 5000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_fefo_3', 'res_fefo', 'lot_later', NULL, 'PURCHASE', 1000)",
+            [],
+        ).unwrap();
+
+        // Sale on 2026-05-10 for 1000 milli:
+        // Must skip lot_exp (expired), and deduct from lot_soon (FEFO)!
+        let sale_input = SaleInput {
+            invoice_date: "2026-05-10".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_fefo".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 5000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+
+        let sale = post_sale(&mut conn, &sale_input).unwrap();
+
+        // Verify that deduction happened on lot_soon
+        let deducted_lot: String = conn.query_row(
+            "SELECT lot_id FROM stock_movements WHERE transaction_id = ?1 AND reason = 'SALE'",
+            params![&sale.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(deducted_lot, "lot_soon", "FEFO must select earliest non-expired batch");
+
+        // Verify expired lot still has 1000 milli
+        let exp_bal: i64 = conn.query_row(
+            "SELECT SUM(quantity_delta_milli) FROM stock_movements WHERE lot_id = 'lot_exp'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(exp_bal, 1000, "Expired lot must not be sold");
     }
 }

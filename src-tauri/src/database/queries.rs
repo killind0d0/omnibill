@@ -17,6 +17,11 @@ pub enum LedgerDiscrepancy {
     PostedTransactionWithoutEntries {
         transaction_id: String,
     },
+    NegativeLotStock {
+        lot_id: String,
+        resource_id: String,
+        current_quantity_milli: i64,
+    },
 }
 
 impl std::fmt::Display for LedgerDiscrepancy {
@@ -54,6 +59,17 @@ impl std::fmt::Display for LedgerDiscrepancy {
             }
             LedgerDiscrepancy::PostedTransactionWithoutEntries { transaction_id } => {
                 write!(f, "POSTED_WITHOUT_ENTRIES: id={}", transaction_id)
+            }
+            LedgerDiscrepancy::NegativeLotStock {
+                lot_id,
+                resource_id,
+                current_quantity_milli,
+            } => {
+                write!(
+                    f,
+                    "NEGATIVE_LOT_STOCK: lot_id={}, resource_id={}, balance_milli={}",
+                    lot_id, resource_id, current_quantity_milli
+                )
             }
         }
     }
@@ -146,6 +162,30 @@ pub fn verify_ledger(conn: &Connection) -> Result<Vec<LedgerDiscrepancy>> {
         let tx_id = r?;
         discrepancies.push(LedgerDiscrepancy::PostedTransactionWithoutEntries {
             transaction_id: tx_id,
+        });
+    }
+
+    // 5. Audit inventory: check that SUM(quantity_delta_milli) is non-negative for every lot
+    let mut stmt_lots = tx.prepare(
+        "SELECT lot_id, resource_id, SUM(quantity_delta_milli) AS total_qty
+         FROM stock_movements
+         WHERE lot_id IS NOT NULL
+         GROUP BY lot_id, resource_id
+         HAVING total_qty < 0",
+    )?;
+    let lot_rows = stmt_lots.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    for r in lot_rows {
+        let (lot_id, res_id, qty) = r?;
+        discrepancies.push(LedgerDiscrepancy::NegativeLotStock {
+            lot_id,
+            resource_id: res_id,
+            current_quantity_milli: qty,
         });
     }
 

@@ -360,6 +360,36 @@ export async function apiPostSale(
       if (res?.invoice_number) {
         sale.invoice_number = res.invoice_number;
         sale.transaction_id = res.transaction_id;
+
+        // Post payment voucher into SQLite if payment details are present
+        if (sale.payment && sale.totals.total_amount_paise > 0) {
+          const modeMap: Record<string, string> = {
+            CASH: 'Cash',
+            UPI: 'Upi',
+            CARD: 'Card',
+            BANK_TRANSFER: 'BankTransfer',
+          };
+          try {
+            await invoke('cmd_post_payment', {
+              db_path: getDbPath(),
+              input: {
+                entity_id: 'ent_walk_in',
+                payment_mode: modeMap[sale.payment.mode] || 'Cash',
+                amount_paise: sale.totals.total_amount_paise,
+                reference_number: sale.payment.reference_number || sale.invoice_number,
+                payment_date: sale.invoice_date,
+                allocations: [
+                  {
+                    transaction_id: res.transaction_id,
+                    amount_paise: sale.totals.total_amount_paise,
+                  },
+                ],
+              },
+            });
+          } catch (payErr) {
+            console.warn('cmd_post_payment after sale warning:', payErr);
+          }
+        }
       }
     } catch (err: any) {
       const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
