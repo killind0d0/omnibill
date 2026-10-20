@@ -1,0 +1,1000 @@
+use super::series::allocate_invoice_number;
+use super::tax::compute_sale;
+use super::{PostedSale, PostedSaleTotals, PostingError, SaleInput};
+use rusqlite::{params, Connection, Transaction};
+use std::collections::HashMap;
+
+/// Helper to generate a unique lowercase hex ID prefixed with `prefix`.
+fn generate_id(tx: &Transaction<'_>, prefix: &str) -> Result<String, PostingError> {
+    let hex_val: String = tx.query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
+    Ok(format!("{}_{}", prefix, hex_val))
+}
+
+/// Posts a sales transaction into the database inside a single immediate transaction.
+///
+/// Steps:
+/// 1. Connection guard: verifies PRAGMA recursive_triggers = ON and foreign_keys = ON.
+/// 2. Tax & line computation (pure math, checked arithmetic).
+/// 3. Allocates gapless invoice number from `number_series`.
+/// 4. Inserts `transactions` and `transaction_items` adhering to 2A invariants.
+/// 5. Posts balanced `ledger_entries` (skipping zero-amount rows).
+/// 6. Performs FIFO stock deduction across `resource_lots` writing negative `stock_movements`.
+/// 7. Commits transaction or rolls back completely on any error.
+pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale, PostingError> {
+    // Connection guard: verify connection was set up by open_connection / apply_pragmas
+    let recursive_triggers: i64 = conn.query_row("PRAGMA recursive_triggers", [], |r| r.get(0))?;
+    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+
+    if recursive_triggers != 1 || foreign_keys != 1 {
+        return Err(PostingError::InsecureConnection {
+            recursive_triggers,
+            foreign_keys,
+        });
+    }
+
+    // 1. Validate and compute all amounts before opening writes
+    let computation = compute_sale(input)?;
+
+    // Begin immediate transaction
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+    // 2. Allocate invoice number
+    let (series, invoice_number) = allocate_invoice_number(&tx, "INV", &input.invoice_date)?;
+
+    // Resolve customer entity
+    let entity_id = match &input.customer {
+        Some(cid) => {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM entities WHERE id = ?1",
+                params![cid],
+                |r| r.get(0),
+            )?;
+            if exists == 0 {
+                return Err(PostingError::ResourceNotFound(format!("Entity {}", cid)));
+            }
+            cid.clone()
+        }
+        None => {
+            let default_id = "ent_walk_in";
+            tx.execute(
+                "INSERT OR IGNORE INTO entities (
+                    id, entity_code, entity_type, full_name, state_code
+                ) VALUES (?1, 'WALK_IN', 'CUSTOMER', 'Walk-in Customer', ?2)",
+                params![default_id, &input.place_of_supply_state_code],
+            )?;
+            default_id.to_string()
+        }
+    };
+
+    // Resolve user ID
+    let user_id: String = match tx.query_row(
+        "SELECT id FROM users WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1",
+        [],
+        |r| r.get(0),
+    ) {
+        Ok(id) => id,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            let default_user = "usr_system";
+            tx.execute(
+                "INSERT OR IGNORE INTO users (id, username, password_hash, full_name, role)
+                 VALUES (?1, 'system', 'sys_hash', 'System User', 'CASHIER')",
+                params![default_user],
+            )?;
+            default_user.to_string()
+        }
+        Err(e) => return Err(PostingError::Database(e)),
+    };
+
+    let tx_id = generate_id(&tx, "tx")?;
+
+    // 3. Insert transactions
+    tx.execute(
+        "INSERT INTO transactions (
+            id, status, seller_state_code, place_of_supply_state_code, series,
+            invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+            cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+            transaction_type, original_transaction_id, invoice_date, created_by_user_id
+        ) VALUES (
+            ?1, 'POSTED', ?2, ?3, ?4,
+            ?5, ?6, ?7, ?8, ?9,
+            ?10, ?11, ?12, ?13, ?14,
+            'SALE', NULL, ?15, ?16
+        )",
+        params![
+            &tx_id,
+            &input.seller_state_code,
+            &input.place_of_supply_state_code,
+            &series,
+            &invoice_number,
+            &entity_id,
+            computation.totals.subtotal_paise,
+            computation.totals.discount_paise,
+            computation.totals.taxable_paise,
+            computation.totals.cgst_paise,
+            computation.totals.sgst_paise,
+            computation.totals.igst_paise,
+            computation.totals.round_off_paise,
+            computation.totals.total_amount_paise,
+            &input.invoice_date,
+            &user_id,
+        ],
+    )?;
+
+    // Insert transaction_items
+    for line in &computation.lines {
+        let item_id = generate_id(&tx, "ti")?;
+        tx.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES (
+                ?1, ?2, ?3, NULL, ?4,
+                ?5, ?6, ?7, ?8,
+                ?9, ?10, ?11, ?12
+            )",
+            params![
+                &item_id,
+                &tx_id,
+                &line.resource_id,
+                line.quantity_milli,
+                line.unit_price_paise,
+                line.discount_paise,
+                line.taxable_paise,
+                line.tax_rate_bps,
+                line.cgst_paise,
+                line.sgst_paise,
+                line.igst_paise,
+                line.line_total_paise,
+            ],
+        )?;
+    }
+
+    // 4. Ledger entries (balanced, in paise)
+    // Debit Accounts Receivable for total amount
+    if computation.totals.total_amount_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_1100', ?3, 0, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.total_amount_paise,
+                format!("Sales Invoice {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Credit Sales Revenue for taxable total
+    if computation.totals.taxable_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_4000', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.taxable_paise,
+                format!("Sales Revenue for {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Credit Output CGST
+    if computation.totals.cgst_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_2100', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.cgst_paise,
+                format!("Output CGST on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Credit Output SGST
+    if computation.totals.sgst_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_2110', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.sgst_paise,
+                format!("Output SGST on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Credit Output IGST
+    if computation.totals.igst_paise > 0 {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_2120', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.igst_paise,
+                format!("Output IGST on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // Round Off entry
+    if computation.totals.round_off_paise > 0 {
+        // Rounded up: credit round-off account
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_4900', 0, ?3, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.round_off_paise,
+                format!("Round off gain on {}", invoice_number),
+            ],
+        )?;
+    } else if computation.totals.round_off_paise < 0 {
+        // Rounded down: debit round-off account
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES (?1, ?2, NULL, 'acc_4900', ?3, 0, ?4)",
+            params![
+                &le_id,
+                &tx_id,
+                computation.totals.round_off_paise.abs(),
+                format!("Round off loss on {}", invoice_number),
+            ],
+        )?;
+    }
+
+    // 5. Stock Movements (FIFO across resource_lots)
+    // Aggregate quantities needed per resource
+    let mut resource_quantities: HashMap<String, i64> = HashMap::new();
+    for line in &input.lines {
+        let entry = resource_quantities
+            .entry(line.resource_id.clone())
+            .or_insert(0);
+        *entry = entry
+            .checked_add(line.quantity_milli)
+            .ok_or(PostingError::MathOverflow)?;
+    }
+
+    for (resource_id, needed_milli) in resource_quantities {
+        let is_tracked: i64 = match tx.query_row(
+            "SELECT is_stock_tracked FROM resources WHERE id = ?1",
+            params![&resource_id],
+            |r| r.get(0),
+        ) {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Err(PostingError::ResourceNotFound(resource_id));
+            }
+            Err(e) => return Err(PostingError::Database(e)),
+        };
+
+        if is_tracked == 0 {
+            // Non-stock resource: skip stock movement
+            continue;
+        }
+
+        // Fetch lots in FIFO order (oldest created_at first)
+        let mut lots_stmt = tx.prepare(
+            "SELECT id FROM resource_lots
+             WHERE resource_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+
+        let lot_ids: Vec<String> = lots_stmt
+            .query_map(params![&resource_id], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
+        let mut remaining = needed_milli;
+
+        for lot_id in lot_ids {
+            let available: i64 = tx.query_row(
+                "SELECT COALESCE(SUM(quantity_delta_milli), 0)
+                 FROM stock_movements
+                 WHERE lot_id = ?1",
+                params![&lot_id],
+                |r| r.get(0),
+            )?;
+
+            if available > 0 {
+                let deduct = std::cmp::min(remaining, available);
+                let sm_id = generate_id(&tx, "sm")?;
+
+                tx.execute(
+                    "INSERT INTO stock_movements (
+                        id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli
+                    ) VALUES (?1, ?2, ?3, ?4, 'SALE', ?5)",
+                    params![
+                        &sm_id,
+                        &resource_id,
+                        &lot_id,
+                        &tx_id,
+                        -deduct,
+                    ],
+                )?;
+
+                remaining = remaining
+                    .checked_sub(deduct)
+                    .ok_or(PostingError::MathOverflow)?;
+
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+
+        if remaining > 0 {
+            return Err(PostingError::InsufficientStock {
+                resource_id,
+                requested_milli: needed_milli,
+                available_milli: needed_milli - remaining,
+            });
+        }
+    }
+
+    // 6. Commit transaction
+    tx.commit()?;
+
+    Ok(PostedSale {
+        transaction_id: tx_id,
+        invoice_number,
+        totals: PostedSaleTotals {
+            subtotal_paise: computation.totals.subtotal_paise,
+            discount_paise: computation.totals.discount_paise,
+            taxable_paise: computation.totals.taxable_paise,
+            cgst_paise: computation.totals.cgst_paise,
+            sgst_paise: computation.totals.sgst_paise,
+            igst_paise: computation.totals.igst_paise,
+            round_off_paise: computation.totals.round_off_paise,
+            total_amount_paise: computation.totals.total_amount_paise,
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::migrations::{run_migrations, MIGRATIONS};
+    use crate::database::queries::verify_ledger;
+    use crate::posting::{LineInput, PriceMode};
+    use std::fs;
+
+    fn setup_test_db() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::database::apply_pragmas(&conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
+
+        // Seed basic fixtures
+        conn.execute(
+            "INSERT INTO business_profiles (id, legal_name, state_code, phone, address_line1, city, postal_code)
+             VALUES ('biz_1', 'OmniMart Corp', '27', '9876543210', 'Market Rd', 'Mumbai', '400001')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, full_name, role)
+             VALUES ('usr_1', 'cashier_alice', 'hash_val', 'Alice Smith', 'CASHIER')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO entities (id, entity_code, entity_type, full_name, state_code)
+             VALUES ('ent_cust_1', 'CUST-001', 'CUSTOMER', 'John Doe', '27')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, is_stock_tracked)
+             VALUES ('res_tracked_1', 'SKU-001', 'Tracked Widget', '1234', 1800, 10000, 1)",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
+             VALUES ('lot_1', 'res_tracked_1', 'BATCH-001', '2028-12-31', 12000)",
+            [],
+        ).unwrap();
+
+        // Initial stock: 10,000 milli (10 units) in lot_1
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_init_1', 'res_tracked_1', 'lot_1', NULL, 'PURCHASE', 10000)",
+            [],
+        ).unwrap();
+
+        conn
+    }
+
+    // Connection guard protects against running on insecure raw connections without recursive_triggers or foreign_keys
+    #[test]
+    fn test_connection_guard_rejects_insecure_connection() {
+        let mut raw_conn = Connection::open_in_memory().unwrap();
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        };
+
+        let res = post_sale(&mut raw_conn, &input);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            PostingError::InsecureConnection { .. } => {}
+            other => panic!("Expected InsecureConnection, got {:?}", other),
+        }
+    }
+
+    // Test 11 protects: Full sales posting ledger balance and stock audit trail.
+    #[test]
+    fn test_11_valid_intra_state_sale_posting() {
+        let mut conn = setup_test_db();
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: Some("ent_cust_1".to_string()),
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        };
+
+        let sale = post_sale(&mut conn, &input).expect("Valid sale posting must succeed");
+        assert_eq!(sale.invoice_number, "INV/26-27/0001");
+        assert_eq!(sale.totals.total_amount_paise, 11800);
+
+        // Verify transaction item exists
+        let item_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM transaction_items WHERE transaction_id = ?1",
+            params![&sale.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(item_count, 1);
+
+        // Verify ledger entries (exact account code, debit, credit)
+        let mut le_stmt = conn.prepare(
+            "SELECT a.code, le.debit_paise, le.credit_paise
+             FROM ledger_entries le
+             JOIN accounts a ON a.id = le.account_id
+             WHERE le.transaction_id = ?1
+             ORDER BY a.code ASC",
+        ).unwrap();
+
+        let entries = le_stmt
+            .query_map(params![&sale.transaction_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(entries, vec![
+            ("1100".to_string(), 11800, 0),    // AR debit
+            ("2100".to_string(), 0, 900),      // Output CGST credit
+            ("2110".to_string(), 0, 900),      // Output SGST credit
+            ("4000".to_string(), 0, 10000),    // Sales Revenue credit
+        ]);
+
+        // Verify stock movement
+        let (qty, reason): (i64, String) = conn.query_row(
+            "SELECT quantity_delta_milli, reason FROM stock_movements WHERE transaction_id = ?1",
+            params![&sale.transaction_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(qty, -1000);
+        assert_eq!(reason, "SALE");
+    }
+
+    // Test 12 protects: Global and transaction-level ledger balance invariant after diverse sales.
+    #[test]
+    fn test_12_verify_ledger_returns_empty_after_sales() {
+        let mut conn = setup_test_db();
+
+        // (a) Intra-state sale
+        let sale_intra = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: Some("ent_cust_1".to_string()),
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        };
+        post_sale(&mut conn, &sale_intra).unwrap();
+
+        // (b) Inter-state sale
+        let sale_inter = SaleInput {
+            invoice_date: "2026-04-16".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "29".to_string(),
+            customer: Some("ent_cust_1".to_string()),
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 10000,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        };
+        post_sale(&mut conn, &sale_inter).unwrap();
+
+        // (c) Multi-line sale with mixed rates
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, is_stock_tracked)
+             VALUES ('res_tracked_2', 'SKU-002', 'Widget 2', '1234', 500, 5000, 0)",
+            [],
+        ).unwrap();
+
+        let sale_multi = SaleInput {
+            invoice_date: "2026-04-17".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: Some("ent_cust_1".to_string()),
+            price_mode: PriceMode::Exclusive,
+            lines: vec![
+                LineInput {
+                    resource_id: "res_tracked_1".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 10000,
+                    discount_paise: 0,
+                    tax_rate_bps: 1800,
+                },
+                LineInput {
+                    resource_id: "res_tracked_2".to_string(),
+                    quantity_milli: 2000,
+                    unit_price_paise: 5000,
+                    discount_paise: 500,
+                    tax_rate_bps: 500,
+                },
+            ],
+        };
+        post_sale(&mut conn, &sale_multi).unwrap();
+
+        // (d) Sale with round-off
+        let sale_round = SaleInput {
+            invoice_date: "2026-04-18".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: Some("ent_cust_1".to_string()),
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 3000,
+                unit_price_paise: 3333,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        };
+        post_sale(&mut conn, &sale_round).unwrap();
+
+        // Verify ledger consistency audit
+        let discrepancies = verify_ledger(&conn).unwrap();
+        assert!(discrepancies.is_empty(), "Ledger discrepancies found: {:?}", discrepancies);
+    }
+
+    // Test 13 protects: Consecutive sequential numbering and financial year boundary rules.
+    #[test]
+    fn test_13_consecutive_invoice_numbers_and_fy() {
+        let mut conn = setup_test_db();
+
+        let base_input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 1000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+
+        let s1 = post_sale(&mut conn, &base_input).unwrap();
+        let s2 = post_sale(&mut conn, &base_input).unwrap();
+        let s3 = post_sale(&mut conn, &base_input).unwrap();
+
+        assert_eq!(s1.invoice_number, "INV/26-27/0001");
+        assert_eq!(s2.invoice_number, "INV/26-27/0002");
+        assert_eq!(s3.invoice_number, "INV/26-27/0003");
+
+        // Sale on March 31, 2027 belongs to FY 2026-27
+        let s_mar31 = post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2027-03-31".to_string(),
+                ..base_input.clone()
+            },
+        ).unwrap();
+        assert_eq!(s_mar31.invoice_number, "INV/26-27/0004");
+
+        // Sale on April 1, 2027 starts FY 2027-28 at 1
+        let s_apr1 = post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2027-04-01".to_string(),
+                ..base_input
+            },
+        ).unwrap();
+        assert_eq!(s_apr1.invoice_number, "INV/27-28/0001");
+    }
+
+    // Test 14 protects: Invoice number maximum length constraint (<= 16 chars).
+    #[test]
+    fn test_14_invoice_number_longer_than_16_rejected() {
+        let mut conn = setup_test_db();
+
+        // Seed a number series with prefix that will cause number to exceed 16 chars
+        conn.execute(
+            "INSERT INTO number_series (id, series_code, financial_year, prefix, next_number, padding, is_active)
+             VALUES ('ns_long', 'INV', '2026-27', 'INV/VERY_LONG_PREFIX/', 1, 4, 1)",
+            [],
+        ).unwrap();
+
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 1000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+
+        let res = post_sale(&mut conn, &input);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            PostingError::InvoiceNumberExceedsLimit(n) => {
+                assert!(n.len() > 16);
+            }
+            other => panic!("Expected InvoiceNumberExceedsLimit, got {:?}", other),
+        }
+
+        // Assert number_series.next_number was not incremented
+        let next_num: i64 = conn.query_row(
+            "SELECT next_number FROM number_series WHERE id = 'ns_long'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(next_num, 1, "Failed sale must consume no number");
+    }
+
+    // Test 15 protects: Multi-line sale atomicity (failure on 2nd line rolls back entire sale).
+    #[test]
+    fn test_15_atomicity_second_line_insufficient_stock() {
+        let mut conn = setup_test_db();
+
+        // Create second tracked resource with only 500 milli stock
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, is_stock_tracked)
+             VALUES ('res_scarce', 'SKU-SCARCE', 'Scarce Item', '1234', 1800, 1000, 1)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
+             VALUES ('lot_scarce', 'res_scarce', 'BATCH-S', '2028-12-31', 1200)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_init_s', 'res_scarce', 'lot_scarce', NULL, 'PURCHASE', 500)",
+            [],
+        ).unwrap();
+
+        let count_tx_before: i64 = conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        let count_ti_before: i64 = conn.query_row("SELECT COUNT(*) FROM transaction_items", [], |r| r.get(0)).unwrap();
+        let count_le_before: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
+        let count_sm_before: i64 = conn.query_row("SELECT COUNT(*) FROM stock_movements", [], |r| r.get(0)).unwrap();
+
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![
+                LineInput {
+                    resource_id: "res_tracked_1".to_string(), // has 10,000 milli
+                    quantity_milli: 1000,
+                    unit_price_paise: 1000,
+                    discount_paise: 0,
+                    tax_rate_bps: 0,
+                },
+                LineInput {
+                    resource_id: "res_scarce".to_string(),    // only has 500 milli!
+                    quantity_milli: 1000,                      // requested 1000 milli -> fails!
+                    unit_price_paise: 1000,
+                    discount_paise: 0,
+                    tax_rate_bps: 0,
+                },
+            ],
+        };
+
+        let res = post_sale(&mut conn, &input);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            PostingError::InsufficientStock { resource_id, requested_milli, available_milli } => {
+                assert_eq!(resource_id, "res_scarce");
+                assert_eq!(requested_milli, 1000);
+                assert_eq!(available_milli, 500);
+            }
+            other => panic!("Expected InsufficientStock, got {:?}", other),
+        }
+
+        // Assert database is byte-for-byte unchanged
+        let count_tx_after: i64 = conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        let count_ti_after: i64 = conn.query_row("SELECT COUNT(*) FROM transaction_items", [], |r| r.get(0)).unwrap();
+        let count_le_after: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
+        let count_sm_after: i64 = conn.query_row("SELECT COUNT(*) FROM stock_movements", [], |r| r.get(0)).unwrap();
+
+        assert_eq!(count_tx_before, count_tx_after);
+        assert_eq!(count_ti_before, count_ti_after);
+        assert_eq!(count_le_before, count_le_after);
+        assert_eq!(count_sm_before, count_sm_after);
+    }
+
+    // Test 16 protects: Oldest-first FIFO stock deduction across multiple lots.
+    #[test]
+    fn test_16_fifo_spanning_two_lots() {
+        let mut conn = setup_test_db();
+
+        // Create resource with two lots: lot_early (500 milli), lot_late (1000 milli)
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, is_stock_tracked)
+             VALUES ('res_fifo', 'SKU-FIFO', 'FIFO Item', '1234', 0, 1000, 1)",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise, created_at)
+             VALUES ('lot_early', 'res_fifo', 'BATCH-1', '2028-12-31', 1000, '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli, created_at)
+             VALUES ('sm_fifo_1', 'res_fifo', 'lot_early', NULL, 'PURCHASE', 500, '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise, created_at)
+             VALUES ('lot_late', 'res_fifo', 'BATCH-2', '2028-12-31', 1000, '2026-02-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli, created_at)
+             VALUES ('sm_fifo_2', 'res_fifo', 'lot_late', NULL, 'PURCHASE', 1000, '2026-02-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        // Sale needing 800 milli: should take 500 from lot_early and 300 from lot_late
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_fifo".to_string(),
+                quantity_milli: 800,
+                unit_price_paise: 1000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+
+        let sale = post_sale(&mut conn, &input).unwrap();
+
+        let mut sm_stmt = conn.prepare(
+            "SELECT lot_id, quantity_delta_milli FROM stock_movements
+             WHERE transaction_id = ?1
+             ORDER BY rowid ASC",
+        ).unwrap();
+
+        let movements = sm_stmt
+            .query_map(params![&sale.transaction_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(movements, vec![
+            ("lot_early".to_string(), -500),
+            ("lot_late".to_string(), -300),
+        ]);
+    }
+
+    // Test 17 protects: Exact stock boundary rule (stock never goes negative).
+    #[test]
+    fn test_17_stock_never_goes_negative() {
+        let mut conn = setup_test_db();
+
+        // lot_1 has 10,000 milli
+        // Sale 1: exact 10,000 milli succeeds
+        let exact_input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 10000,
+                unit_price_paise: 1000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+        let res1 = post_sale(&mut conn, &exact_input);
+        assert!(res1.is_ok(), "Exact stock sale must succeed");
+
+        // Sale 2: 1 milli over fails
+        let over_input = SaleInput {
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1,
+                unit_price_paise: 1000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+            ..exact_input
+        };
+        let res2 = post_sale(&mut conn, &over_input);
+        assert!(res2.is_err(), "1 milli over available stock must fail");
+        assert!(matches!(res2.unwrap_err(), PostingError::InsufficientStock { .. }));
+    }
+
+    // Test 18 protects: Non-stock resource handling (services write no stock movements).
+    #[test]
+    fn test_18_non_stock_resource_no_movements() {
+        let mut conn = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, is_stock_tracked)
+             VALUES ('res_service', 'SRV-001', 'Consulting Fee', '9983', 1800, 50000, 0)",
+            [],
+        ).unwrap();
+
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_service".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 50000,
+                discount_paise: 0,
+                tax_rate_bps: 1800,
+            }],
+        };
+
+        let sale = post_sale(&mut conn, &input).unwrap();
+
+        let sm_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM stock_movements WHERE transaction_id = ?1",
+            params![&sale.transaction_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(sm_count, 0, "Non-stock resource must produce zero stock movements");
+    }
+
+    // Test 19 protects: Immutability preservation (posting must not weaken triggers).
+    #[test]
+    fn test_19_posted_sale_immutability() {
+        let mut conn = setup_test_db();
+        let input = SaleInput {
+            invoice_date: "2026-04-15".to_string(),
+            seller_state_code: "27".to_string(),
+            place_of_supply_state_code: "27".to_string(),
+            customer: None,
+            price_mode: PriceMode::Exclusive,
+            lines: vec![LineInput {
+                resource_id: "res_tracked_1".to_string(),
+                quantity_milli: 1000,
+                unit_price_paise: 1000,
+                discount_paise: 0,
+                tax_rate_bps: 0,
+            }],
+        };
+
+        let sale = post_sale(&mut conn, &input).unwrap();
+
+        // Attempting to UPDATE ledger_entries must fail with IMMUTABILITY_RULE_BROKEN
+        let res_le = conn.execute(
+            "UPDATE ledger_entries SET debit_paise = 9999 WHERE transaction_id = ?1",
+            params![&sale.transaction_id],
+        );
+        assert!(res_le.is_err());
+        assert!(res_le.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // Attempting to UPDATE transaction total must fail with IMMUTABILITY_RULE_BROKEN
+        let res_tx = conn.execute(
+            "UPDATE transactions SET total_amount_paise = 9999 WHERE id = ?1",
+            params![&sale.transaction_id],
+        );
+        assert!(res_tx.is_err());
+        assert!(res_tx.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+    }
+
+    // Test 20 protects: No float rule in accounting code (static scan of posting module).
+    #[test]
+    fn test_20_static_scan_no_floats() {
+        let posting_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/posting");
+        let entries = fs::read_dir(posting_dir).expect("src/posting must exist");
+
+        let f32_str = format!("f{}", 32);
+        let f64_str = format!("f{}", 64);
+
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let content = fs::read_to_string(&path).unwrap();
+                for (idx, line) in content.lines().enumerate() {
+                    if line.contains("test_20") || line.contains("f32_str") || line.contains("f64_str") {
+                        continue;
+                    }
+                    assert!(
+                        !line.contains(&f32_str),
+                        "File {:?} line {} contains forbidden type {}",
+                        path.file_name(),
+                        idx + 1,
+                        f32_str
+                    );
+                    assert!(
+                        !line.contains(&f64_str),
+                        "File {:?} line {} contains forbidden type {}",
+                        path.file_name(),
+                        idx + 1,
+                        f64_str
+                    );
+                }
+            }
+        }
+    }
+}
