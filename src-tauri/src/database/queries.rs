@@ -59,18 +59,26 @@ impl std::fmt::Display for LedgerDiscrepancy {
     }
 }
 
-/// Scans ledger_entries and transactions for accounting discrepancies:
-/// 1. Transaction-level imbalance: SUM(debit_paise) != SUM(credit_paise) per transaction_id.
-/// 2. Payment-level imbalance: SUM(debit_paise) != SUM(credit_paise) per payment_id.
-/// 3. Global ledger imbalance: grand total of debits != credits.
-/// 4. Orphaned POSTED transactions: status = 'POSTED' with 0 ledger_entries.
+/// Performs an internal consistency audit of the general ledger and posted transactions.
 ///
-/// Returns an empty vector if and only if the entire ledger is completely balanced and consistent.
+/// All checks run inside a single read transaction to guarantee a point-in-time snapshot.
+///
+/// What is checked:
+/// 1. Transaction-level balance: SUM(debit_paise) == SUM(credit_paise) for every transaction_id in ledger_entries.
+/// 2. Payment-level balance: SUM(debit_paise) == SUM(credit_paise) for every payment_id in ledger_entries.
+/// 3. Grand total ledger balance: Grand total of all debit_paise == Grand total of all credit_paise across the entire ledger.
+/// 4. Orphaned POSTED transactions: Every transaction with status = 'POSTED' has at least one ledger_entries row.
+///
+/// What is NOT checked:
+/// - This function does NOT compare ledger entry amounts to transactions.total_amount_paise or transaction_items.
+/// - It does NOT verify inventory stock movements against transactions.
+/// - It does NOT verify tax breakdown splits against entity state codes.
 pub fn verify_ledger(conn: &Connection) -> Result<Vec<LedgerDiscrepancy>> {
+    let tx = conn.unchecked_transaction()?;
     let mut discrepancies = Vec::new();
 
     // 1. Check balance per transaction_id
-    let mut stmt_tx = conn.prepare(
+    let mut stmt_tx = tx.prepare(
         "SELECT transaction_id,
                 SUM(debit_paise) - SUM(credit_paise) as diff
          FROM ledger_entries
@@ -90,7 +98,7 @@ pub fn verify_ledger(conn: &Connection) -> Result<Vec<LedgerDiscrepancy>> {
     }
 
     // 2. Check balance per payment_id
-    let mut stmt_pay = conn.prepare(
+    let mut stmt_pay = tx.prepare(
         "SELECT payment_id,
                 SUM(debit_paise) - SUM(credit_paise) as diff
          FROM ledger_entries
@@ -110,7 +118,7 @@ pub fn verify_ledger(conn: &Connection) -> Result<Vec<LedgerDiscrepancy>> {
     }
 
     // 3. Check grand total debits == credits
-    let (total_debit, total_credit): (i64, i64) = conn.query_row(
+    let (total_debit, total_credit): (i64, i64) = tx.query_row(
         "SELECT COALESCE(SUM(debit_paise), 0), COALESCE(SUM(credit_paise), 0) FROM ledger_entries",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
@@ -123,7 +131,7 @@ pub fn verify_ledger(conn: &Connection) -> Result<Vec<LedgerDiscrepancy>> {
     }
 
     // 4. Return POSTED transactions that have zero ledger_entries
-    let mut stmt_missing = conn.prepare(
+    let mut stmt_missing = tx.prepare(
         "SELECT t.id
          FROM transactions t
          WHERE t.status = 'POSTED'

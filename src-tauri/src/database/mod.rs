@@ -165,9 +165,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -205,9 +206,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -245,9 +247,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -297,9 +300,10 @@ mod tests {
         let insert_res = conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_standalone', 'POSTED', '27', '27', 'INV', 'INV/26-27/0099', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_standalone', 'POSTED', '27', '27', 'INV', 'INV/26-27/0099', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(insert_res.is_ok(), "Control insert must succeed: {:?}", insert_res.err());
@@ -349,9 +353,10 @@ mod tests {
         let valid_res = conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_ctrl_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_ctrl_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             params![exact_16_invoice_no],
         );
         assert!(valid_res.is_ok(), "16-character invoice_number must be accepted: {:?}", valid_res.err());
@@ -363,9 +368,10 @@ mod tests {
         let fail_res = conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_fail_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_fail_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             params![long_invoice_no],
         );
         assert!(fail_res.is_err(), "17-character invoice_number must fail");
@@ -434,9 +440,10 @@ mod tests {
         let tx_ctrl = conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_ctrl_10', 'POSTED', '27', '27', 'INV', 'INV/26-27/0010', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_ctrl_10', 'POSTED', '27', '27', 'INV', 'INV/26-27/0010', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(tx_ctrl.is_ok(), "Control transaction insert must succeed");
@@ -445,20 +452,31 @@ mod tests {
         let tx_err = conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_neg', 'POSTED', '27', '27', 'INV', 'INV/26-27/0011', 'ent_1', 1000, 1000, -100, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_neg', 'POSTED', '27', '27', 'INV', 'INV/26-27/0011', 'ent_1', -100, 0, -100, 0, 0, 0, 0, -100, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(tx_err.is_err());
         assert!(tx_err.unwrap_err().to_string().contains("CHECK constraint failed"));
 
         // --- Ledger Entries ---
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_valid', 'POSTED', '27', '27', 'INV', 'INV/26-27/0003', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        ).unwrap();
+
         // Positive control
         let led_ctrl = conn.execute(
             "INSERT INTO ledger_entries (
                 id, transaction_id, account_id, debit_paise, credit_paise, narration
-            ) VALUES ('led_ctrl_10', 'tx_ctrl_10', 'acc_ar', 1000, 0, 'Positive debit')",
+            ) VALUES ('led_ctrl_10', 'tx_valid', 'acc_ar', 1000, 0, 'Positive debit')",
             [],
         );
         assert!(led_ctrl.is_ok(), "Control ledger insert must succeed");
@@ -467,7 +485,7 @@ mod tests {
         let led_neg_debit = conn.execute(
             "INSERT INTO ledger_entries (
                 id, transaction_id, account_id, debit_paise, credit_paise, narration
-            ) VALUES ('led_neg_d', 'tx_ctrl_10', 'acc_ar', -1000, 0, 'Negative debit')",
+            ) VALUES ('led_neg_d', 'tx_valid', 'acc_ar', -1000, 0, 'Negative debit')",
             [],
         );
         assert!(led_neg_debit.is_err());
@@ -477,7 +495,7 @@ mod tests {
         let led_neg_credit = conn.execute(
             "INSERT INTO ledger_entries (
                 id, transaction_id, account_id, debit_paise, credit_paise, narration
-            ) VALUES ('led_neg_c', 'tx_ctrl_10', 'acc_ar', 0, -1000, 'Negative credit')",
+            ) VALUES ('led_neg_c', 'tx_valid', 'acc_ar', 0, -1000, 'Negative credit')",
             [],
         );
         assert!(led_neg_credit.is_err());
@@ -523,9 +541,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_unbal', 'POSTED', '27', '27', 'INV', 'INV/26-27/0004', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_unbal', 'POSTED', '27', '27', 'INV', 'INV/26-27/0004', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -623,9 +642,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_stock', 'POSTED', '27', '27', 'INV', 'INV/26-27/0020', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_stock', 'POSTED', '27', '27', 'INV', 'INV/26-27/0020', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -674,9 +694,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_items', 'POSTED', '27', '27', 'INV', 'INV/26-27/0021', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_items', 'POSTED', '27', '27', 'INV', 'INV/26-27/0021', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -745,9 +766,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_fk_test', 'POSTED', '27', '27', 'INV', 'INV/26-27/0030', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_fk_test', 'POSTED', '27', '27', 'INV', 'INV/26-27/0030', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -860,9 +882,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_item_up', 'POSTED', '27', '27', 'INV', 'INV/26-27/0050', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_item_up', 'POSTED', '27', '27', 'INV', 'INV/26-27/0050', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -900,9 +923,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_pay_19', 'POSTED', '27', '27', 'INV', 'INV/26-27/0051', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_pay_19', 'POSTED', '27', '27', 'INV', 'INV/26-27/0051', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -952,9 +976,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_guard', 'POSTED', '27', '27', 'INV', 'INV/26-27/0060', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_guard', 'POSTED', '27', '27', 'INV', 'INV/26-27/0060', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -996,9 +1021,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_21', 'POSTED', '27', '27', 'INV', 'INV/26-27/0070', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_21', 'POSTED', '27', '27', 'INV', 'INV/26-27/0070', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1043,9 +1069,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_22', 'POSTED', '27', '27', 'INV', 'INV/26-27/0072', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_22', 'POSTED', '27', '27', 'INV', 'INV/26-27/0072', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1112,9 +1139,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_23', 'POSTED', '27', '27', 'INV', 'INV/26-27/0073', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_23', 'POSTED', '27', '27', 'INV', 'INV/26-27/0073', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1141,9 +1169,10 @@ mod tests {
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
-                invoice_number, entity_id, subtotal_paise, taxable_paise,
-                total_amount_paise, created_by_user_id
-            ) VALUES ('tx_orphan', 'POSTED', '27', '27', 'INV', 'INV/26-27/0080', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_orphan', 'POSTED', '27', '27', 'INV', 'INV/26-27/0080', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1210,5 +1239,482 @@ mod tests {
             "Fully balanced database must return zero issues, got: {:?}",
             final_issues
         );
+    }
+
+    // 25. upgrade path: migrate empty DB to v2 with slice [m1, m2], then run full MIGRATIONS list and assert v3
+    #[test]
+    fn test_25_upgrade_path_v2_to_v3() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_pragmas(&conn).unwrap();
+
+        // Step 1: Migrate empty DB to v2 with slice [m1, m2]
+        run_migrations(&mut conn, &MIGRATIONS[0..2]).unwrap();
+        assert_eq!(get_user_version(&conn).unwrap(), 2);
+
+        // Step 2: Run full MIGRATIONS list (upgrades v2 to v3)
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
+        assert_eq!(get_user_version(&conn).unwrap(), 3);
+    }
+
+    // 26. each new CHECK constraint on transactions
+    #[test]
+    fn test_26_transactions_new_check_constraints() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // (a) Valid control SALE with NULL original_transaction_id succeeds
+        let ctrl_sale = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c26_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0261', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(ctrl_sale.is_ok(), "Valid SALE with original_transaction_id NULL must succeed");
+
+        // (b) SALE with non-NULL original_transaction_id FAILS
+        let fail_sale_with_orig = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c26_2', 'POSTED', '27', '27', 'INV', 'INV/26-27/0262', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', 'tx_c26_1', '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_sale_with_orig.is_err());
+        assert!(fail_sale_with_orig.unwrap_err().to_string().contains("CHECK constraint failed"));
+
+        // (c) SALE_RETURN with NULL original_transaction_id FAILS
+        let fail_return_without_orig = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c26_3', 'POSTED', '27', '27', 'INV', 'INV/26-27/0263', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_return_without_orig.is_err());
+        assert!(fail_return_without_orig.unwrap_err().to_string().contains("CHECK constraint failed"));
+
+        // (d) Valid control SALE_RETURN with non-NULL original_transaction_id succeeds
+        let ctrl_return = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c26_4', 'POSTED', '27', '27', 'INV', 'INV/26-27/0264', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', 'tx_c26_1', '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(ctrl_return.is_ok(), "Valid SALE_RETURN with original_transaction_id must succeed");
+
+        // (e) Bad invoice_date format FAILS
+        let fail_bad_date = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c26_5', 'POSTED', '27', '27', 'INV', 'INV/26-27/0265', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '20-10-2026', 'usr_1')",
+            [],
+        );
+        assert!(fail_bad_date.is_err());
+        assert!(fail_bad_date.unwrap_err().to_string().contains("CHECK constraint failed"));
+
+        // (f) round_off_paise 100 FAILS (allowed -99..99)
+        let fail_round_off = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c26_6', 'POSTED', '27', '27', 'INV', 'INV/26-27/0266', 'ent_1', 1000, 0, 1000, 0, 0, 0, 100, 1100, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_round_off.is_err());
+        assert!(fail_round_off.unwrap_err().to_string().contains("CHECK constraint failed"));
+    }
+
+    // 27. guard covers all columns, allows POSTED -> CANCELLED, blocks invoice_date / transaction_type change
+    #[test]
+    fn test_27_transactions_guard_covers_all_columns() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // 1. Read PRAGMA table_info(transactions) and assert every column appears in trigger SQL
+        let mut col_stmt = conn.prepare("PRAGMA table_info(transactions)").unwrap();
+        let cols = col_stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap();
+
+        let trigger_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_transactions_update_guard'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        for col in &cols {
+            assert!(
+                trigger_sql.contains(col),
+                "Column '{}' of transactions table must appear in trg_transactions_update_guard SQL",
+                col
+            );
+        }
+
+        // 2. Control insert
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_c27', 'POSTED', '27', '27', 'INV', 'INV/26-27/0270', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        ).unwrap();
+
+        // 3. Changing invoice_date is BLOCKED
+        let fail_date = conn.execute(
+            "UPDATE transactions SET invoice_date = '2026-10-21' WHERE id = 'tx_c27'",
+            [],
+        );
+        assert!(fail_date.is_err());
+        assert!(fail_date.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // 4. Changing transaction_type is BLOCKED
+        let fail_type = conn.execute(
+            "UPDATE transactions SET transaction_type = 'PURCHASE' WHERE id = 'tx_c27'",
+            [],
+        );
+        assert!(fail_type.is_err());
+        assert!(fail_type.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // 5. Changing status POSTED -> CANCELLED alone SUCCEEDS
+        let pass_cancel = conn.execute(
+            "UPDATE transactions SET status = 'CANCELLED' WHERE id = 'tx_c27'",
+            [],
+        );
+        assert!(pass_cancel.is_ok(), "POSTED -> CANCELLED must succeed");
+    }
+
+    // 28. every invariant in item 3: fail case and pass case
+    #[test]
+    fn test_28_before_insert_invariants() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // --- Transaction Invariants ---
+
+        // (a) subtotal - discount != taxable FAILS
+        let fail_sub = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_inv_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0281', 'ent_1', 1000, 100, 800, 0, 0, 0, 0, 800, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_sub.is_err());
+        let err_sub = fail_sub.unwrap_err().to_string();
+        assert!(err_sub.contains("INVARIANT_BROKEN: subtotal_paise - discount_paise must equal taxable_paise"));
+
+        // (b) total != taxable + cgst + sgst + igst + round_off FAILS
+        let fail_tot = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_inv_2', 'POSTED', '27', '27', 'INV', 'INV/26-27/0282', 'ent_1', 1000, 0, 1000, 90, 90, 0, 0, 1150, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_tot.is_err());
+        let err_tot = fail_tot.unwrap_err().to_string();
+        assert!(err_tot.contains("INVARIANT_BROKEN: total_amount_paise must equal taxable_paise + cgst_paise + sgst_paise + igst_paise + round_off_paise"));
+
+        // (c) Intra-state with IGST > 0 FAILS
+        let fail_intra_igst = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_inv_3', 'POSTED', '27', '27', 'INV', 'INV/26-27/0283', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_intra_igst.is_err());
+        let err_intra = fail_intra_igst.unwrap_err().to_string();
+        assert!(err_intra.contains("INVARIANT_BROKEN: Intra-state transaction cannot have IGST"));
+
+        // (d) Inter-state with CGST/SGST > 0 FAILS
+        let fail_inter_cgst = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_inv_4', 'POSTED', '27', '29', 'INV', 'INV/26-27/0284', 'ent_1', 1000, 0, 1000, 90, 90, 0, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(fail_inter_cgst.is_err());
+        let err_inter = fail_inter_cgst.unwrap_err().to_string();
+        assert!(err_inter.contains("INVARIANT_BROKEN: Inter-state transaction cannot have CGST or SGST"));
+
+        // Pass case for intra-state transaction with round off
+        let pass_intra = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_inv_pass_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0285', 'ent_1', 1000, 100, 900, 81, 81, 0, -2, 1060, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(pass_intra.is_ok(), "Valid intra-state insert must pass invariants: {:?}", pass_intra.err());
+
+        // Pass case for inter-state transaction
+        let pass_inter = conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_inv_pass_2', 'POSTED', '27', '29', 'INV', 'INV/26-27/0286', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        );
+        assert!(pass_inter.is_ok(), "Valid inter-state insert must pass invariants: {:?}", pass_inter.err());
+
+        // --- Transaction Items Invariants ---
+
+        // (e) line_total != taxable + cgst + sgst + igst FAILS
+        let fail_line_tot = conn.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES ('ti_inv_1', 'tx_inv_pass_1', 'res_1', NULL, 1000, 1000, 0, 1000, 1800, 90, 90, 0, 1100)",
+            [],
+        );
+        assert!(fail_line_tot.is_err());
+        let err_lt = fail_line_tot.unwrap_err().to_string();
+        assert!(err_lt.contains("INVARIANT_BROKEN: line_total_paise must equal taxable_paise + cgst_paise + sgst_paise + igst_paise"));
+
+        // (f) cgst != sgst FAILS
+        let fail_unequal_cgst = conn.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES ('ti_inv_2', 'tx_inv_pass_1', 'res_1', NULL, 1000, 1000, 0, 1000, 1800, 90, 89, 0, 1179)",
+            [],
+        );
+        assert!(fail_unequal_cgst.is_err());
+        let err_cgst = fail_unequal_cgst.unwrap_err().to_string();
+        assert!(err_cgst.contains("INVARIANT_BROKEN: cgst_paise must equal sgst_paise"));
+
+        // (g) igst > 0 when cgst > 0 FAILS
+        let fail_both_taxes = conn.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES ('ti_inv_3', 'tx_inv_pass_1', 'res_1', NULL, 1000, 1000, 0, 1000, 1800, 90, 90, 180, 1360)",
+            [],
+        );
+        assert!(fail_both_taxes.is_err());
+        let err_both = fail_both_taxes.unwrap_err().to_string();
+        assert!(err_both.contains("INVARIANT_BROKEN: igst_paise must be 0 when cgst_paise > 0"));
+
+        // Pass case for transaction_items
+        let pass_item = conn.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES ('ti_inv_pass', 'tx_inv_pass_1', 'res_1', NULL, 1000, 1000, 100, 900, 1800, 81, 81, 0, 1062)",
+            [],
+        );
+        assert!(pass_item.is_ok(), "Valid item insert must succeed: {:?}", pass_item.err());
+    }
+
+    // 29. seeded accounts: all 10 exist with the right type; running migrations again does not duplicate
+    #[test]
+    fn test_29_seeded_chart_of_accounts() {
+        let mut conn = setup_migrated_in_memory_db();
+
+        let expected_accounts = [
+            ("1000", "Cash in Hand", "ASSET"),
+            ("1010", "Bank and Digital Receipts", "ASSET"),
+            ("1100", "Accounts Receivable", "ASSET"),
+            ("1200", "Inventory", "ASSET"),
+            ("2100", "Output CGST", "LIABILITY"),
+            ("2110", "Output SGST", "LIABILITY"),
+            ("2120", "Output IGST", "LIABILITY"),
+            ("4000", "Sales Revenue", "REVENUE"),
+            ("4010", "Sales Returns", "REVENUE"),
+            ("4900", "Round Off", "EXPENSE"),
+        ];
+
+        for (code, name, acct_type) in expected_accounts {
+            let row: (String, String) = conn
+                .query_row(
+                    "SELECT name, type FROM accounts WHERE code = ?1",
+                    params![code],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row.0, name, "Account name mismatch for code {}", code);
+            assert_eq!(row.1, acct_type, "Account type mismatch for code {}", code);
+        }
+
+        let initial_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM accounts WHERE code IN ('1000','1010','1100','1200','2100','2110','2120','4000','4010','4900')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(initial_count, 10);
+
+        // Re-running migrations must not duplicate
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
+        let second_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM accounts WHERE code IN ('1000','1010','1100','1200','2100','2110','2120','4000','4010','4900')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(second_count, 10);
+    }
+
+    // 30. accounts guard: type change blocked after entries exist, allowed before
+    #[test]
+    fn test_30_accounts_guard_behavior() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // (a) Account without entries: updating code and type is ALLOWED
+        let update_free = conn.execute(
+            "UPDATE accounts SET code = '1098', type = 'LIABILITY' WHERE id = 'acc_ar'",
+            [],
+        );
+        assert!(update_free.is_ok(), "Updating unused account code and type must succeed");
+
+        // Revert back
+        conn.execute("UPDATE accounts SET code = '1001', type = 'ASSET' WHERE id = 'acc_ar'", []).unwrap();
+
+        // (b) Create a transaction and ledger entry referencing acc_ar
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
+                cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
+                transaction_type, original_transaction_id, invoice_date, created_by_user_id
+            ) VALUES ('tx_acct_test', 'POSTED', '27', '27', 'INV', 'INV/26-27/0300', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_acct_test', 'tx_acct_test', 'acc_ar', 1000, 0, 'Entry')",
+            [],
+        ).unwrap();
+
+        // (c) Now updating code on acc_ar is BLOCKED
+        let fail_code = conn.execute(
+            "UPDATE accounts SET code = '9999' WHERE id = 'acc_ar'",
+            [],
+        );
+        assert!(fail_code.is_err());
+        assert!(fail_code.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (d) Updating type on acc_ar is BLOCKED
+        let fail_type = conn.execute(
+            "UPDATE accounts SET type = 'EXPENSE' WHERE id = 'acc_ar'",
+            [],
+        );
+        assert!(fail_type.is_err());
+        assert!(fail_type.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // (e) Updating name on acc_ar is still ALLOWED
+        let pass_name = conn.execute(
+            "UPDATE accounts SET name = 'Trade Receivables' WHERE id = 'acc_ar'",
+            [],
+        );
+        assert!(pass_name.is_ok(), "Updating name must be allowed even with ledger entries");
+    }
+
+    // 31. number_series: +2 fails, decrement fails, prefix change after issuance fails, +1 passes, DELETE fails, is_active toggle passes
+    #[test]
+    fn test_31_number_series_guard_rules() {
+        let conn = setup_migrated_in_memory_db();
+
+        conn.execute(
+            "INSERT INTO number_series (id, series_code, financial_year, prefix, next_number, padding, is_active)
+             VALUES ('ns_test', 'TAX_INV', '26-27', 'INV/26-27/', 1, 4, 1)",
+            [],
+        ).unwrap();
+
+        // 1. +1 passes
+        let pass_inc = conn.execute(
+            "UPDATE number_series SET next_number = next_number + 1 WHERE id = 'ns_test'",
+            [],
+        );
+        assert!(pass_inc.is_ok(), "Incrementing next_number by exactly 1 must pass: {:?}", pass_inc.err());
+
+        // 2. is_active toggle passes
+        let pass_toggle = conn.execute(
+            "UPDATE number_series SET is_active = 0 WHERE id = 'ns_test'",
+            [],
+        );
+        assert!(pass_toggle.is_ok(), "Toggling is_active must pass: {:?}", pass_toggle.err());
+
+        // 3. +2 fails
+        let fail_plus_two = conn.execute(
+            "UPDATE number_series SET next_number = next_number + 2 WHERE id = 'ns_test'",
+            [],
+        );
+        assert!(fail_plus_two.is_err());
+        assert!(fail_plus_two.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // 4. decrement fails
+        let fail_dec = conn.execute(
+            "UPDATE number_series SET next_number = next_number - 1 WHERE id = 'ns_test'",
+            [],
+        );
+        assert!(fail_dec.is_err());
+        assert!(fail_dec.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // 5. prefix change fails
+        let fail_prefix = conn.execute(
+            "UPDATE number_series SET prefix = 'NEW/26-27/' WHERE id = 'ns_test'",
+            [],
+        );
+        assert!(fail_prefix.is_err());
+        assert!(fail_prefix.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // 6. DELETE fails
+        let fail_del = conn.execute("DELETE FROM number_series WHERE id = 'ns_test'", []);
+        assert!(fail_del.is_err());
+        assert!(fail_del.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+    }
+
+    // 32. database with user_version 99 makes run_migrations return Err, unchanged
+    #[test]
+    fn test_32_user_version_higher_than_slice_returns_err() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_pragmas(&conn).unwrap();
+
+        // Set user_version to 99
+        conn.pragma_update(None, "user_version", 99).unwrap();
+        assert_eq!(get_user_version(&conn).unwrap(), 99);
+
+        // Attempt running migrations
+        let res = run_migrations(&mut conn, MIGRATIONS);
+        assert!(res.is_err(), "run_migrations must return Err when user_version > highest migration");
+
+        // Assert user_version remains 99 and unchanged
+        assert_eq!(get_user_version(&conn).unwrap(), 99);
     }
 }
