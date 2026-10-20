@@ -29,10 +29,13 @@ import {
   apiGetBusinessProfile,
   apiPostSale,
   posStorage,
+  INITIAL_PRODUCTS,
 } from '../../lib/api';
 import { posSound } from '../../lib/sound';
 import { shiftManager } from '../../lib/shiftManager';
 import { ShiftSettlementModal } from './ShiftSettlementModal';
+import { CatalogImporterModal } from '../importer/CatalogImporterModal';
+import { Sparkles, Upload } from 'lucide-react';
 
 export const LightningPOS: React.FC = () => {
   // Application Modes
@@ -70,6 +73,7 @@ export const LightningPOS: React.FC = () => {
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [isImporterOpen, setIsImporterOpen] = useState(false);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -80,6 +84,14 @@ export const LightningPOS: React.FC = () => {
       setToastMessage((cur) => (cur === msg ? null : cur));
     }, 3000);
   }, []);
+
+  // Quick 1-click loading of sample products for fresh stores
+  const handleLoadSampleProducts = async () => {
+    posStorage.setProducts(INITIAL_PRODUCTS);
+    await refreshProducts();
+    posSound.playSuccess();
+    showToast('Loaded 15 sample grocery & supermarket items with barcodes!');
+  };
 
   // Load initial products and business profile
   const refreshProducts = useCallback(async () => {
@@ -507,6 +519,37 @@ export const LightningPOS: React.FC = () => {
         <div className="flex-1 flex overflow-hidden p-3 gap-3">
           {/* Left Column: Cart Table & Numpad Quick Entry */}
           <div className="flex-1 flex flex-col space-y-3 overflow-hidden">
+            {/* Empty Catalog Helper Banner */}
+            {products.length === 0 && (
+              <div className="bg-blue-950/40 border border-blue-500/40 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-md shrink-0">
+                <div className="flex items-center space-x-2.5">
+                  <Sparkles className="w-5 h-5 text-blue-400 shrink-0 animate-pulse" />
+                  <div>
+                    <span className="font-bold text-white block">Product Catalog is Empty</span>
+                    <span className="text-slate-400 text-[11px]">
+                      Load sample supermarket goods or import your existing Excel/CSV catalog.
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleLoadSampleProducts}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold shadow-sm transition-all cursor-pointer"
+                  >
+                    Load 15 Sample Items
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsImporterOpen(true)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg font-semibold transition-all cursor-pointer"
+                  >
+                    Import Excel
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* High-Performance Cart Table */}
             <CartTable
               items={taxComputation.lines}
@@ -605,6 +648,12 @@ export const LightningPOS: React.FC = () => {
         operatorName={business.legal_name || 'Cashier 1'}
         counterId="POS-01"
         storeName={business.trade_name || business.legal_name}
+      />
+
+      <CatalogImporterModal
+        isOpen={isImporterOpen}
+        onClose={() => setIsImporterOpen(false)}
+        onImportSuccess={() => refreshProducts()}
       />
     </div>
   );

@@ -210,6 +210,11 @@ class PosStorage {
     return [...this.products];
   }
 
+  public setProducts(products: ResourceItem[]): void {
+    this.products = [...products];
+    this.saveToStorage(STORAGE_KEY_PRODUCTS, this.products);
+  }
+
   public findProductByBarcodeOrSku(query: string): ResourceItem | undefined {
     const q = query.trim().toLowerCase();
     return this.products.find(

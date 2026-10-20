@@ -32,6 +32,7 @@ import {
 } from './types';
 import { VerticalIPCBridge } from './ipc';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { PredictiveSearchDropdown } from '../components/pos/PredictiveSearchDropdown';
 
 export const SchoolBilling: React.FC = () => {
   // State
@@ -63,6 +64,10 @@ export const SchoolBilling: React.FC = () => {
   const [newGuardianName, setNewGuardianName] = useState('');
   const [newGuardianPhone, setNewGuardianPhone] = useState('');
 
+  // Search queries for autocomplete
+  const [studentSearchQuery, setStudentSearchQuery] = useState('');
+  const [feeSearchQuery, setFeeSearchQuery] = useState('');
+
   // Load Students and Fee Heads
   useEffect(() => {
     VerticalIPCBridge.getEntities('STUDENT').then((list) => {
@@ -86,6 +91,18 @@ export const SchoolBilling: React.FC = () => {
   const selectedStudent = useMemo(() => {
     return students.find((s) => s.id === selectedStudentId) || students[0] || null;
   }, [students, selectedStudentId]);
+
+  const filteredStudents = useMemo(() => {
+    const q = studentSearchQuery.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(
+      (s) =>
+        s.full_name.toLowerCase().includes(q) ||
+        s.roll_no.toLowerCase().includes(q) ||
+        s.class_name.toLowerCase().includes(q) ||
+        (s.guardian_phone && s.guardian_phone.includes(q))
+    );
+  }, [students, studentSearchQuery]);
 
   // Add Fee Head to Voucher
   const addFeeHead = (resource: ResourceItem) => {
@@ -259,13 +276,22 @@ export const SchoolBilling: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-[11px] text-slate-400 block mb-1">Search & Select Student:</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] text-slate-400">Search & Select Student:</label>
+                <input
+                  type="text"
+                  placeholder="Filter name / roll..."
+                  value={studentSearchQuery}
+                  onChange={(e) => setStudentSearchQuery(e.target.value)}
+                  className="px-2 py-0.5 bg-slate-950 border border-slate-750 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono"
+                />
+              </div>
               <select
                 value={selectedStudentId}
                 onChange={(e) => setSelectedStudentId(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-medium"
               >
-                {students.map((s) => (
+                {filteredStudents.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.full_name} (Roll: {s.roll_no} • {s.class_name}-{s.section})
                   </option>
@@ -356,8 +382,29 @@ export const SchoolBilling: React.FC = () => {
             </span>
           </div>
 
-          {/* Quick Add Fee Head */}
+          {/* Quick Add Fee Head with Autocomplete */}
           <div className="flex items-center space-x-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-60">
+              <input
+                type="text"
+                placeholder="Type fee head (e.g. Tuition)..."
+                value={feeSearchQuery}
+                onChange={(e) => setFeeSearchQuery(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-amber-200 placeholder-slate-500 font-mono focus:outline-none focus:border-amber-500"
+              />
+              <PredictiveSearchDropdown
+                query={feeSearchQuery}
+                products={catalog}
+                isOpen={feeSearchQuery.trim().length >= 1}
+                onSelect={(item) => {
+                  addFeeHead(item);
+                  setFeeSearchQuery('');
+                }}
+                onClose={() => setFeeSearchQuery('')}
+                anchorPosition="bottom"
+              />
+            </div>
+
             <select
               onChange={(e) => {
                 const res = catalog.find((r) => r.id === e.target.value);
@@ -365,10 +412,10 @@ export const SchoolBilling: React.FC = () => {
                 e.target.value = '';
               }}
               defaultValue=""
-              className="px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              className="px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-amber-500 shrink-0"
             >
               <option value="" disabled>
-                + Add Institutional Fee Head...
+                + List
               </option>
               {catalog.map((item) => (
                 <option key={item.id} value={item.id}>

@@ -36,6 +36,7 @@ import {
 } from './types';
 import { VerticalIPCBridge } from './ipc';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
+import { PredictiveSearchDropdown } from '../components/pos/PredictiveSearchDropdown';
 
 export const HospitalBilling: React.FC = () => {
   // State
@@ -72,6 +73,10 @@ export const HospitalBilling: React.FC = () => {
   const [newPhone, setNewPhone] = useState('');
   const [newRoomBedNo, setNewRoomBedNo] = useState('OPD Clinic 1');
 
+  // Search Queries for instant autocomplete
+  const [patientSearchQuery, setPatientSearchQuery] = useState('');
+  const [medSearchQuery, setMedSearchQuery] = useState('');
+
   // Load Patients & Clinical Resources
   useEffect(() => {
     VerticalIPCBridge.getEntities('PATIENT').then((list) => {
@@ -96,6 +101,23 @@ export const HospitalBilling: React.FC = () => {
   const selectedPatient = useMemo(() => {
     return patients.find((p) => p.id === selectedPatientId) || patients[0] || null;
   }, [patients, selectedPatientId]);
+
+  const filteredPatients = useMemo(() => {
+    const q = patientSearchQuery.trim().toLowerCase();
+    if (!q) return patients;
+    return patients.filter(
+      (p) =>
+        p.full_name.toLowerCase().includes(q) ||
+        p.uhid.toLowerCase().includes(q) ||
+        p.opd_no.toLowerCase().includes(q) ||
+        (p.phone && p.phone.includes(q))
+    );
+  }, [patients, patientSearchQuery]);
+
+  const pharmacyCatalog = useMemo(() => {
+    const meds = catalog.filter((r) => r.category === 'Pharmacy' || r.hsn_sac === '3004');
+    return meds.length > 0 ? meds : catalog;
+  }, [catalog]);
 
   // Add Item to Clinical Bill (Consultation, Pharmacy, or Bed)
   const addItemToClinicalBill = (resource: ResourceItem, dosage?: string) => {
@@ -290,13 +312,22 @@ export const HospitalBilling: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-[11px] text-slate-400 block mb-1">Search & Select Patient:</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] text-slate-400">Search & Select Patient:</label>
+                <input
+                  type="text"
+                  placeholder="Filter by name / UHID..."
+                  value={patientSearchQuery}
+                  onChange={(e) => setPatientSearchQuery(e.target.value)}
+                  className="px-2 py-0.5 bg-slate-950 border border-slate-750 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-rose-500 font-mono"
+                />
+              </div>
               <select
                 value={selectedPatientId}
                 onChange={(e) => setSelectedPatientId(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-rose-500 font-medium"
               >
-                {patients.map((p) => (
+                {filteredPatients.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.full_name} ({p.uhid} • {p.age}Y/{p.gender[0]})
                   </option>
@@ -435,31 +466,53 @@ export const HospitalBilling: React.FC = () => {
 
         {/* SECTION 2: PHARMACY MEDICINE PRESCRIPTION BILLING */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-2 gap-2">
             <div className="flex items-center space-x-2">
               <Pill className="w-4 h-4 text-cyan-400" />
               <h3 className="text-xs font-bold text-slate-100">2. Pharmacy Medicines</h3>
             </div>
-            <select
-              onChange={(e) => {
-                const med = catalog.find((r) => r.id === e.target.value);
-                if (med) addItemToClinicalBill(med);
-                e.target.value = '';
-              }}
-              defaultValue=""
-              className="text-[10px] bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-cyan-300"
-            >
-              <option value="" disabled>
-                + Prescribe Med
-              </option>
-              {catalog
-                .filter((r) => r.category === 'Pharmacy')
-                .map((m) => (
+
+            <div className="flex items-center space-x-2 relative flex-1 sm:max-w-xs">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  placeholder="Type medicine name (e.g. Dolo, Pan)..."
+                  value={medSearchQuery}
+                  onChange={(e) => setMedSearchQuery(e.target.value)}
+                  className="w-full px-2.5 py-1 bg-slate-950 border border-slate-700 rounded-lg text-xs text-cyan-200 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500"
+                />
+                <PredictiveSearchDropdown
+                  query={medSearchQuery}
+                  products={pharmacyCatalog}
+                  isOpen={medSearchQuery.trim().length >= 1}
+                  onSelect={(item) => {
+                    addItemToClinicalBill(item);
+                    setMedSearchQuery('');
+                  }}
+                  onClose={() => setMedSearchQuery('')}
+                  anchorPosition="bottom"
+                />
+              </div>
+
+              <select
+                onChange={(e) => {
+                  const med = catalog.find((r) => r.id === e.target.value);
+                  if (med) addItemToClinicalBill(med);
+                  e.target.value = '';
+                }}
+                defaultValue=""
+                className="text-[10px] bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-cyan-300 shrink-0"
+              >
+                <option value="" disabled>
+                  + Select
+                </option>
+                {pharmacyCatalog.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
                 ))}
-            </select>
+              </select>
+            </div>
           </div>
 
           <div className="space-y-2 max-h-48 overflow-y-auto">

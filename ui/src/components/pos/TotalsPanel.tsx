@@ -1,7 +1,15 @@
-import React from 'react';
-import { CreditCard, Printer, RotateCcw, ArrowRightLeft, User, Coins } from 'lucide-react';
+import React, { useMemo, useEffect } from 'react';
+import { CreditCard, Printer, RotateCcw, ArrowRightLeft, User, Coins, ShieldAlert, ShieldCheck, Wallet, CheckCircle2 } from 'lucide-react';
 import { ComputedDocumentTotals, PriceMode } from '../../types/pos';
 import { formatPaise } from '../../lib/tax';
+import { ErpStorageService } from '../../lib/erpStorage';
+import { Entity } from '../../types/accounting';
+
+interface CustomerEntity extends Entity {
+  trade_name?: string;
+  legal_name?: string;
+  credit_limit_paise?: number;
+}
 
 interface TotalsPanelProps {
   totals: ComputedDocumentTotals;
@@ -52,6 +60,47 @@ export const TotalsPanel: React.FC<TotalsPanelProps> = ({
   onOpenShift,
 }) => {
   const roundOffSign = totals.round_off_paise > 0 ? '+' : '';
+
+  // Load customer entities for real-time Khata & Credit balance checks
+  const registeredCustomers = useMemo<CustomerEntity[]>(() => {
+    try {
+      return ErpStorageService.getEntities('CUSTOMER') as CustomerEntity[];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const matchedCustomer = useMemo<CustomerEntity | null>(() => {
+    const p = customerPhone.trim();
+    const n = customerName.trim().toLowerCase();
+    if (p.length >= 4) {
+      const byPhone = registeredCustomers.find((c) => c.phone && c.phone.includes(p));
+      if (byPhone) return byPhone;
+    }
+    if (n.length >= 2) {
+      const byName = registeredCustomers.find(
+        (c) =>
+          (c.full_name && c.full_name.toLowerCase().includes(n)) ||
+          (c.trade_name && c.trade_name.toLowerCase().includes(n)) ||
+          (c.legal_name && c.legal_name.toLowerCase().includes(n))
+      );
+      if (byName) return byName;
+    }
+    return null;
+  }, [registeredCustomers, customerPhone, customerName]);
+
+  // Auto-fill customer name if 10-digit phone matches an existing customer
+  useEffect(() => {
+    if (customerPhone.trim().length === 10 && matchedCustomer && !customerName.trim()) {
+      onChangeCustomerName(matchedCustomer.trade_name || matchedCustomer.full_name || matchedCustomer.legal_name || '');
+    }
+  }, [customerPhone, matchedCustomer, customerName, onChangeCustomerName]);
+
+  const creditLimitPaise = matchedCustomer?.credit_limit_paise || 0;
+  const currentDuesPaise = matchedCustomer?.current_balance_paise || 0;
+  const availableCreditPaise = Math.max(0, creditLimitPaise - Math.max(0, currentDuesPaise));
+  const isCreditExceeded =
+    creditLimitPaise > 0 && currentDuesPaise + totals.total_amount_paise > creditLimitPaise;
 
   return (
     <div className="w-80 bg-slate-900 border border-slate-800 rounded-xl flex flex-col justify-between shadow-lg p-4 select-none">
@@ -114,6 +163,48 @@ export const TotalsPanel: React.FC<TotalsPanelProps> = ({
                 className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-blue-500"
               />
             </div>
+
+            {/* Real-time Customer Khata & Credit Indicator */}
+            {matchedCustomer ? (
+              <div className="mt-1.5 p-2 rounded-lg bg-slate-950/90 border border-slate-800 text-[11px] space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1 text-slate-200 font-semibold truncate max-w-[170px]">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span className="truncate">
+                      {matchedCustomer.trade_name || matchedCustomer.full_name || matchedCustomer.legal_name}
+                    </span>
+                  </div>
+                  <span
+                    className={`font-mono font-bold ${
+                      currentDuesPaise > 0 ? 'text-amber-400' : 'text-emerald-400'
+                    }`}
+                  >
+                    Khata: {formatPaise(Math.abs(currentDuesPaise))} {currentDuesPaise >= 0 ? 'Dr' : 'Cr'}
+                  </span>
+                </div>
+                {creditLimitPaise > 0 && (
+                  <div className="pt-1 border-t border-slate-800/80">
+                    <div className="flex justify-between text-[10px] text-slate-400">
+                      <span>Available: {formatPaise(availableCreditPaise)}</span>
+                      <span className="font-mono">Limit: {formatPaise(creditLimitPaise)}</span>
+                    </div>
+                    {isCreditExceeded && (
+                      <div className="mt-1 flex items-center space-x-1 text-[10px] text-rose-400 font-semibold bg-rose-950/40 p-1 rounded border border-rose-500/30">
+                        <ShieldAlert className="w-3 h-3 shrink-0" />
+                        <span>
+                          Exceeds limit by {formatPaise(currentDuesPaise + totals.total_amount_paise - creditLimitPaise)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : customerPhone.trim().length >= 4 ? (
+              <div className="mt-1 text-[10px] text-slate-500 flex items-center space-x-1">
+                <User className="w-3 h-3 text-slate-600" />
+                <span>New customer (Will be auto-enrolled on checkout)</span>
+              </div>
+            ) : null}
           </div>
         </div>
 

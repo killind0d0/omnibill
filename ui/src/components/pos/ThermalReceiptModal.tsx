@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Printer, Check, QrCode } from 'lucide-react';
+import { Printer, Check, QrCode, MessageCircle } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { CompletedSale } from '../../types/pos';
 import { formatPaise, formatMilliQty } from '../../lib/tax';
@@ -41,12 +41,57 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
 
   const isIntraState = sale.seller_state_code === sale.place_of_supply_state_code;
   const is58 = paperWidth === '58mm';
+  const [waNotice, setWaNotice] = useState<string | null>(null);
 
   const handlePrint = () => {
     window.print();
     if (onConfirmComplete) {
       onConfirmComplete();
     }
+  };
+
+  const handleSendWhatsApp = () => {
+    if (!sale) return;
+
+    const lineDetails = sale.lines
+      .map(
+        (l) =>
+          `• *${l.name}*\n   ${formatMilliQty(l.quantity_milli)} x ₹${(l.unit_price_paise / 100).toFixed(2)} = *₹${(l.line_total_paise / 100).toFixed(2)}*`
+      )
+      .join('\n');
+
+    const text =
+`🧾 *TAX INVOICE / CASH BILL*
+*${sale.business.trade_name || sale.business.legal_name}*
+${sale.business.address_line1}, ${sale.business.city}
+GSTIN: *${sale.business.gstin}* | Ph: ${sale.business.phone}
+----------------------------------------
+📄 *Invoice:* #${sale.invoice_number}
+📅 *Date:* ${sale.invoice_date} ${sale.invoice_time || ''}
+${sale.customer_name ? `👤 *Customer:* ${sale.customer_name}\n` : ''}----------------------------------------
+*ITEMS:*
+${lineDetails}
+----------------------------------------
+Subtotal: ₹${(sale.totals.subtotal_paise / 100).toFixed(2)}
+${sale.totals.discount_paise > 0 ? `Discount: -₹${(sale.totals.discount_paise / 100).toFixed(2)}\n` : ''}Taxable Value: ₹${(sale.totals.taxable_paise / 100).toFixed(2)}
+CGST: ₹${(sale.totals.cgst_paise / 100).toFixed(2)} | SGST: ₹${(sale.totals.sgst_paise / 100).toFixed(2)}
+${sale.totals.round_off_paise !== 0 ? `Round Off: ₹${(sale.totals.round_off_paise / 100).toFixed(2)}\n` : ''}*TOTAL AMOUNT: ₹${(sale.totals.total_amount_paise / 100).toFixed(2)}*
+----------------------------------------
+💳 Payment Mode: *${sale.payment?.mode || 'CASH'}*
+Thank you for shopping with us! 🙏`;
+
+    const rawPhone = (sale.customer_phone || '').replace(/[^0-9]/g, '');
+    if (rawPhone && rawPhone.length >= 10) {
+      const fullPhone = rawPhone.length === 10 ? `91${rawPhone}` : rawPhone;
+      window.open(`https://wa.me/${fullPhone}?text=${encodeURIComponent(text)}`, '_blank');
+      setWaNotice(`Opened WhatsApp for +${fullPhone}`);
+    } else {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        navigator.clipboard.writeText(text);
+        setWaNotice('Receipt text copied to clipboard! (Add customer phone to send direct)');
+      }
+    }
+    setTimeout(() => setWaNotice(null), 4000);
   };
 
   return (
@@ -58,43 +103,63 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
       icon={<Printer className="w-5 h-5 text-indigo-400" />}
     >
       <div className="flex flex-col space-y-4">
-        {/* Controls Bar: 58mm / 80mm Switcher & Print Button */}
-        <div className="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800 select-none">
+        {/* Controls Bar: 58mm / 80mm Switcher, WhatsApp & Print Button */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800 gap-2 select-none">
           <div className="flex items-center space-x-1.5">
-            <span className="text-xs text-slate-400 font-medium px-2">Paper Width:</span>
+            <span className="text-xs text-slate-400 font-medium px-1">Width:</span>
             <button
               type="button"
               onClick={() => setPaperWidth('58mm')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
                 paperWidth === '58mm'
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
-              58mm (2-inch)
+              58mm
             </button>
             <button
               type="button"
               onClick={() => setPaperWidth('80mm')}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
                 paperWidth === '80mm'
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
-              80mm (3-inch Standard)
+              80mm (Standard)
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>Print Receipt</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={handleSendWhatsApp}
+              className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow transition-all cursor-pointer"
+              title="Send Receipt via WhatsApp"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-emerald-300" />
+              <span>WhatsApp Bill</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-md shadow-blue-600/20 transition-all cursor-pointer"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print</span>
+            </button>
+          </div>
         </div>
+
+        {/* WhatsApp Notice Banner */}
+        {waNotice && (
+          <div className="px-3 py-1.5 bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs rounded-lg flex items-center space-x-2">
+            <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>{waNotice}</span>
+          </div>
+        )}
 
         {/* Thermal Slip Receipt Rendering Container */}
         <div className="flex justify-center bg-slate-950/80 p-4 rounded-xl border border-slate-800 overflow-y-auto max-h-[65vh]">
