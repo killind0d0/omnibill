@@ -85,7 +85,9 @@ pub fn compute_line(
     // gross = round(quantity_milli * unit_price_paise / 1000)
     let q_i128 = line.quantity_milli as i128;
     let p_i128 = line.unit_price_paise as i128;
-    let mult = q_i128.checked_mul(p_i128).ok_or(PostingError::MathOverflow)?;
+    let mult = q_i128
+        .checked_mul(p_i128)
+        .ok_or(PostingError::MathOverflow)?;
     let gross_i128 = round_div_i128(mult, 1000)?;
     let gross_paise = i64::try_from(gross_i128).map_err(|_| PostingError::MathOverflow)?;
 
@@ -108,12 +110,16 @@ pub fn compute_line(
             let r_i128 = rate_bps as i128;
 
             let (cgst, sgst, igst) = if is_intra_state {
-                let num = t_i128.checked_mul(r_i128).ok_or(PostingError::MathOverflow)?;
+                let num = t_i128
+                    .checked_mul(r_i128)
+                    .ok_or(PostingError::MathOverflow)?;
                 let c_i128 = round_div_i128(num, 20000)?;
                 let c = i64::try_from(c_i128).map_err(|_| PostingError::MathOverflow)?;
                 (c, c, 0)
             } else {
-                let num = t_i128.checked_mul(r_i128).ok_or(PostingError::MathOverflow)?;
+                let num = t_i128
+                    .checked_mul(r_i128)
+                    .ok_or(PostingError::MathOverflow)?;
                 let i_i128 = round_div_i128(num, 10000)?;
                 let i = i64::try_from(i_i128).map_err(|_| PostingError::MathOverflow)?;
                 (0, 0, i)
@@ -135,7 +141,9 @@ pub fn compute_line(
             let denom = 10000i128
                 .checked_add(rate_bps as i128)
                 .ok_or(PostingError::MathOverflow)?;
-            let num = b_i128.checked_mul(10000).ok_or(PostingError::MathOverflow)?;
+            let num = b_i128
+                .checked_mul(10000)
+                .ok_or(PostingError::MathOverflow)?;
             let taxable_i128 = round_div_i128(num, denom)?;
             let taxable_paise =
                 i64::try_from(taxable_i128).map_err(|_| PostingError::MathOverflow)?;
@@ -144,12 +152,16 @@ pub fn compute_line(
             let r_i128 = rate_bps as i128;
 
             let (cgst, sgst, igst) = if is_intra_state {
-                let num = t_i128.checked_mul(r_i128).ok_or(PostingError::MathOverflow)?;
+                let num = t_i128
+                    .checked_mul(r_i128)
+                    .ok_or(PostingError::MathOverflow)?;
                 let c_i128 = round_div_i128(num, 20000)?;
                 let c = i64::try_from(c_i128).map_err(|_| PostingError::MathOverflow)?;
                 (c, c, 0)
             } else {
-                let num = t_i128.checked_mul(r_i128).ok_or(PostingError::MathOverflow)?;
+                let num = t_i128
+                    .checked_mul(r_i128)
+                    .ok_or(PostingError::MathOverflow)?;
                 let i_i128 = round_div_i128(num, 10000)?;
                 let i = i64::try_from(i_i128).map_err(|_| PostingError::MathOverflow)?;
                 (0, 0, i)

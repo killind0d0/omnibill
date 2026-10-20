@@ -1,7 +1,7 @@
 use super::series::allocate_invoice_number;
 use super::tax::compute_sale;
 use super::{PostedSale, PostedSaleTotals, PostingError, SaleInput};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 use std::collections::HashMap;
 
 /// Helper to generate a unique lowercase hex ID prefixed with `prefix`.
@@ -322,13 +322,7 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
                     "INSERT INTO stock_movements (
                         id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli
                     ) VALUES (?1, ?2, ?3, ?4, 'SALE', ?5)",
-                    params![
-                        &sm_id,
-                        &resource_id,
-                        &lot_id,
-                        &tx_id,
-                        -deduct,
-                    ],
+                    params![&sm_id, &resource_id, &lot_id, &tx_id, -deduct,],
                 )?;
 
                 remaining = remaining
@@ -372,7 +366,7 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::migrations::{run_migrations, MIGRATIONS};
+    use crate::database::migrations::{MIGRATIONS, run_migrations};
     use crate::database::queries::verify_ledger;
     use crate::posting::{LineInput, PriceMode};
     use std::fs;
@@ -393,13 +387,15 @@ mod tests {
             "INSERT INTO users (id, username, password_hash, full_name, role)
              VALUES ('usr_1', 'cashier_alice', 'hash_val', 'Alice Smith', 'CASHIER')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO entities (id, entity_code, entity_type, full_name, state_code)
              VALUES ('ent_cust_1', 'CUST-001', 'CUSTOMER', 'John Doe', '27')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise, is_stock_tracked)
@@ -411,7 +407,8 @@ mod tests {
             "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
              VALUES ('lot_1', 'res_tracked_1', 'BATCH-001', '2028-12-31', 12000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Initial stock: 10,000 milli (10 units) in lot_1
         conn.execute(
@@ -474,36 +471,47 @@ mod tests {
         assert_eq!(sale.totals.total_amount_paise, 11800);
 
         // Verify transaction item exists
-        let item_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM transaction_items WHERE transaction_id = ?1",
-            params![&sale.transaction_id],
-            |r| r.get(0),
-        ).unwrap();
+        let item_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transaction_items WHERE transaction_id = ?1",
+                params![&sale.transaction_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(item_count, 1);
 
         // Verify ledger entries (exact account code, debit, credit)
-        let mut le_stmt = conn.prepare(
-            "SELECT a.code, le.debit_paise, le.credit_paise
+        let mut le_stmt = conn
+            .prepare(
+                "SELECT a.code, le.debit_paise, le.credit_paise
              FROM ledger_entries le
              JOIN accounts a ON a.id = le.account_id
              WHERE le.transaction_id = ?1
              ORDER BY a.code ASC",
-        ).unwrap();
+            )
+            .unwrap();
 
         let entries = le_stmt
             .query_map(params![&sale.transaction_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
             })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        assert_eq!(entries, vec![
-            ("1100".to_string(), 11800, 0),    // AR debit
-            ("2100".to_string(), 0, 900),      // Output CGST credit
-            ("2110".to_string(), 0, 900),      // Output SGST credit
-            ("4000".to_string(), 0, 10000),    // Sales Revenue credit
-        ]);
+        assert_eq!(
+            entries,
+            vec![
+                ("1100".to_string(), 11800, 0), // AR debit
+                ("2100".to_string(), 0, 900),   // Output CGST credit
+                ("2110".to_string(), 0, 900),   // Output SGST credit
+                ("4000".to_string(), 0, 10000), // Sales Revenue credit
+            ]
+        );
 
         // Verify stock movement
         let (qty, reason): (i64, String) = conn.query_row(
@@ -605,7 +613,11 @@ mod tests {
 
         // Verify ledger consistency audit
         let discrepancies = verify_ledger(&conn).unwrap();
-        assert!(discrepancies.is_empty(), "Ledger discrepancies found: {:?}", discrepancies);
+        assert!(
+            discrepancies.is_empty(),
+            "Ledger discrepancies found: {:?}",
+            discrepancies
+        );
     }
 
     // Test 13 protects: Consecutive sequential numbering and financial year boundary rules.
@@ -643,7 +655,8 @@ mod tests {
                 invoice_date: "2027-03-31".to_string(),
                 ..base_input.clone()
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(s_mar31.invoice_number, "INV/26-27/0004");
 
         // Sale on April 1, 2027 starts FY 2027-28 at 1
@@ -653,7 +666,8 @@ mod tests {
                 invoice_date: "2027-04-01".to_string(),
                 ..base_input
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(s_apr1.invoice_number, "INV/27-28/0001");
     }
 
@@ -694,11 +708,13 @@ mod tests {
         }
 
         // Assert number_series.next_number was not incremented
-        let next_num: i64 = conn.query_row(
-            "SELECT next_number FROM number_series WHERE id = 'ns_long'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let next_num: i64 = conn
+            .query_row(
+                "SELECT next_number FROM number_series WHERE id = 'ns_long'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(next_num, 1, "Failed sale must consume no number");
     }
 
@@ -717,17 +733,26 @@ mod tests {
             "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
              VALUES ('lot_scarce', 'res_scarce', 'BATCH-S', '2028-12-31', 1200)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
              VALUES ('sm_init_s', 'res_scarce', 'lot_scarce', NULL, 'PURCHASE', 500)",
             [],
         ).unwrap();
 
-        let count_tx_before: i64 = conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0)).unwrap();
-        let count_ti_before: i64 = conn.query_row("SELECT COUNT(*) FROM transaction_items", [], |r| r.get(0)).unwrap();
-        let count_le_before: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
-        let count_sm_before: i64 = conn.query_row("SELECT COUNT(*) FROM stock_movements", [], |r| r.get(0)).unwrap();
+        let count_tx_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        let count_ti_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transaction_items", [], |r| r.get(0))
+            .unwrap();
+        let count_le_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0))
+            .unwrap();
+        let count_sm_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM stock_movements", [], |r| r.get(0))
+            .unwrap();
 
         let input = SaleInput {
             invoice_date: "2026-04-15".to_string(),
@@ -744,8 +769,8 @@ mod tests {
                     tax_rate_bps: 0,
                 },
                 LineInput {
-                    resource_id: "res_scarce".to_string(),    // only has 500 milli!
-                    quantity_milli: 1000,                      // requested 1000 milli -> fails!
+                    resource_id: "res_scarce".to_string(), // only has 500 milli!
+                    quantity_milli: 1000,                  // requested 1000 milli -> fails!
                     unit_price_paise: 1000,
                     discount_paise: 0,
                     tax_rate_bps: 0,
@@ -756,7 +781,11 @@ mod tests {
         let res = post_sale(&mut conn, &input);
         assert!(res.is_err());
         match res.unwrap_err() {
-            PostingError::InsufficientStock { resource_id, requested_milli, available_milli } => {
+            PostingError::InsufficientStock {
+                resource_id,
+                requested_milli,
+                available_milli,
+            } => {
                 assert_eq!(resource_id, "res_scarce");
                 assert_eq!(requested_milli, 1000);
                 assert_eq!(available_milli, 500);
@@ -765,10 +794,18 @@ mod tests {
         }
 
         // Assert database is byte-for-byte unchanged
-        let count_tx_after: i64 = conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0)).unwrap();
-        let count_ti_after: i64 = conn.query_row("SELECT COUNT(*) FROM transaction_items", [], |r| r.get(0)).unwrap();
-        let count_le_after: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
-        let count_sm_after: i64 = conn.query_row("SELECT COUNT(*) FROM stock_movements", [], |r| r.get(0)).unwrap();
+        let count_tx_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
+            .unwrap();
+        let count_ti_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transaction_items", [], |r| r.get(0))
+            .unwrap();
+        let count_le_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0))
+            .unwrap();
+        let count_sm_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM stock_movements", [], |r| r.get(0))
+            .unwrap();
 
         assert_eq!(count_tx_before, count_tx_after);
         assert_eq!(count_ti_before, count_ti_after);
@@ -828,11 +865,13 @@ mod tests {
 
         let sale = post_sale(&mut conn, &input).unwrap();
 
-        let mut sm_stmt = conn.prepare(
-            "SELECT lot_id, quantity_delta_milli FROM stock_movements
+        let mut sm_stmt = conn
+            .prepare(
+                "SELECT lot_id, quantity_delta_milli FROM stock_movements
              WHERE transaction_id = ?1
              ORDER BY rowid ASC",
-        ).unwrap();
+            )
+            .unwrap();
 
         let movements = sm_stmt
             .query_map(params![&sale.transaction_id], |r| {
@@ -842,10 +881,13 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        assert_eq!(movements, vec![
-            ("lot_early".to_string(), -500),
-            ("lot_late".to_string(), -300),
-        ]);
+        assert_eq!(
+            movements,
+            vec![
+                ("lot_early".to_string(), -500),
+                ("lot_late".to_string(), -300),
+            ]
+        );
     }
 
     // Test 17 protects: Exact stock boundary rule (stock never goes negative).
@@ -885,7 +927,10 @@ mod tests {
         };
         let res2 = post_sale(&mut conn, &over_input);
         assert!(res2.is_err(), "1 milli over available stock must fail");
-        assert!(matches!(res2.unwrap_err(), PostingError::InsufficientStock { .. }));
+        assert!(matches!(
+            res2.unwrap_err(),
+            PostingError::InsufficientStock { .. }
+        ));
     }
 
     // Test 18 protects: Non-stock resource handling (services write no stock movements).
@@ -916,12 +961,17 @@ mod tests {
 
         let sale = post_sale(&mut conn, &input).unwrap();
 
-        let sm_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM stock_movements WHERE transaction_id = ?1",
-            params![&sale.transaction_id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(sm_count, 0, "Non-stock resource must produce zero stock movements");
+        let sm_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM stock_movements WHERE transaction_id = ?1",
+                params![&sale.transaction_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            sm_count, 0,
+            "Non-stock resource must produce zero stock movements"
+        );
     }
 
     // Test 19 protects: Immutability preservation (posting must not weaken triggers).
@@ -951,7 +1001,12 @@ mod tests {
             params![&sale.transaction_id],
         );
         assert!(res_le.is_err());
-        assert!(res_le.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            res_le
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // Attempting to UPDATE transaction total must fail with IMMUTABILITY_RULE_BROKEN
         let res_tx = conn.execute(
@@ -959,7 +1014,12 @@ mod tests {
             params![&sale.transaction_id],
         );
         assert!(res_tx.is_err());
-        assert!(res_tx.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            res_tx
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
     }
 
     // Test 20 protects: No float rule in accounting code (static scan of posting module).
@@ -976,7 +1036,10 @@ mod tests {
             if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                 let content = fs::read_to_string(&path).unwrap();
                 for (idx, line) in content.lines().enumerate() {
-                    if line.contains("test_20") || line.contains("f32_str") || line.contains("f64_str") {
+                    if line.contains("test_20")
+                        || line.contains("f32_str")
+                        || line.contains("f64_str")
+                    {
                         continue;
                     }
                     assert!(

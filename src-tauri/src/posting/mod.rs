@@ -1,16 +1,29 @@
+pub mod payment;
+pub mod purchase;
+pub mod returns;
 pub mod sale;
 pub mod series;
 pub mod tax;
 
+pub use payment::{PaymentAllocationInput, PaymentInput, PaymentMode, PostedPayment, post_payment};
+pub use purchase::{PostedPurchase, PurchaseInput, PurchaseLineInput, post_purchase};
+pub use returns::{
+    PostedReturn, PurchaseReturnInput, ReturnLineInput, SaleReturnInput, post_purchase_return,
+    post_sale_return,
+};
 pub use sale::post_sale;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PriceMode {
+    #[serde(alias = "Exclusive", alias = "exclusive")]
     Exclusive,
+    #[serde(alias = "Inclusive", alias = "inclusive")]
     Inclusive,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineInput {
     pub resource_id: String,
     pub quantity_milli: i64,
@@ -19,7 +32,7 @@ pub struct LineInput {
     pub tax_rate_bps: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaleInput {
     pub invoice_date: String,
     pub seller_state_code: String,
@@ -29,7 +42,7 @@ pub struct SaleInput {
     pub lines: Vec<LineInput>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostedSaleTotals {
     pub subtotal_paise: i64,
     pub discount_paise: i64,
@@ -41,7 +54,7 @@ pub struct PostedSaleTotals {
     pub total_amount_paise: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostedSale {
     pub transaction_id: String,
     pub invoice_number: String,
@@ -77,6 +90,14 @@ pub enum PostingError {
         series_code: String,
         financial_year: String,
     },
+    InvalidAmount(i64),
+    EntityNotFound(String),
+    TransactionNotFound(String),
+    AllocationExceedsPayment {
+        allocated_paise: i64,
+        payment_paise: i64,
+    },
+    InvalidOriginalTransaction(String),
 }
 
 impl std::fmt::Display for PostingError {
@@ -135,6 +156,22 @@ impl std::fmt::Display for PostingError {
                 "Active number series not found for series '{}' and FY '{}'",
                 series_code, financial_year
             ),
+            PostingError::InvalidAmount(a) => {
+                write!(f, "Invalid amount: {} paise (must be > 0)", a)
+            }
+            PostingError::EntityNotFound(e) => write!(f, "Entity '{}' not found", e),
+            PostingError::TransactionNotFound(t) => write!(f, "Transaction '{}' not found", t),
+            PostingError::AllocationExceedsPayment {
+                allocated_paise,
+                payment_paise,
+            } => write!(
+                f,
+                "Total allocated amount ({} paise) exceeds payment amount ({} paise)",
+                allocated_paise, payment_paise
+            ),
+            PostingError::InvalidOriginalTransaction(msg) => {
+                write!(f, "Invalid original transaction: {}", msg)
+            }
         }
     }
 }

@@ -75,13 +75,13 @@ pub fn allocate_invoice_number(
         Ok(found) => found,
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             // Auto-seed default series for this FY if not yet configured
-            let short_fy = if fy.len() >= 5 {
-                &fy[2..]
-            } else {
-                &fy
-            };
+            let short_fy = if fy.len() >= 5 { &fy[2..] } else { &fy };
             let prefix = format!("{}/{}/", series_code, short_fy);
-            let gen_id = format!("ns_{}_{}", series_code.to_lowercase(), short_fy.replace('-', "_"));
+            let gen_id = format!(
+                "ns_{}_{}",
+                series_code.to_lowercase(),
+                short_fy.replace('-', "_")
+            );
             let next_num = 1i64;
             let padding = 4i64;
 

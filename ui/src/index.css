@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 min-h-screen antialiased;
+    font-feature-settings: "tnum" on, "cv02" on, "cv03" on, "cv04" on;
+  }
+}
+
+/* Custom scrollbars for POS tables */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Print Styles for Thermal Slip */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #thermal-slip-print, #thermal-slip-print * {
+    visibility: visible;
+  }
+  #thermal-slip-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: black;
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "omnibill",
+  "version": "0.1.0",
+  "description": "High-Performance, Zero-Float, Offline-First Desktop ERP & POS for Indian Retail & Wholesale",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:ui": "npm --prefix ui run dev",
+    "build": "tauri build",
+    "build:ui": "npm --prefix ui run build",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:cargo": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml",
+    "format": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "erp",
+    "pos",
+    "gst",
+    "offline-first",
+    "accounting",
+    "rea",
+    "tauri",
+    "rust",
+    "sqlite",
+    "escpos"
+  ],
+  "author": "OmniBill Engineering Team",
+  "license": "MIT"
+}

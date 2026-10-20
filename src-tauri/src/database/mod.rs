@@ -31,8 +31,8 @@ pub fn apply_pragmas(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use migrations::{get_user_version, run_migrations, Migration, LATEST_VERSION, MIGRATIONS};
-    use queries::{verify_ledger, LedgerDiscrepancy};
+    use migrations::{LATEST_VERSION, MIGRATIONS, Migration, get_user_version, run_migrations};
+    use queries::{LedgerDiscrepancy, verify_ledger};
     use rusqlite::params;
     use std::fs;
 
@@ -54,31 +54,36 @@ mod tests {
             "INSERT INTO users (id, username, password_hash, full_name, role)
              VALUES ('usr_1', 'cashier_alice', 'hash_val', 'Alice Smith', 'CASHIER')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO accounts (id, code, name, type)
              VALUES ('acc_ar', '1001', 'Accounts Receivable', 'ASSET')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO accounts (id, code, name, type)
              VALUES ('acc_sales', '4001', 'Sales Revenue', 'REVENUE')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO entities (id, entity_code, entity_type, full_name, state_code)
              VALUES ('ent_1', 'CUST-001', 'CUSTOMER', 'John Doe', '27')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO resources (id, sku_or_code, name, hsn_sac, tax_rate_bps, base_price_paise)
              VALUES ('res_1', 'SKU-001', 'Test Item', '1234', 1800, 1000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // 1. fresh DB migrates to the latest user_version
@@ -187,7 +192,11 @@ mod tests {
             ) VALUES ('led_ctrl_4', 'tx_1', 'acc_ar', 500, 0, 'Valid control debit')",
             [],
         );
-        assert!(ctrl_res.is_ok(), "Control insert must succeed: {:?}", ctrl_res.err());
+        assert!(
+            ctrl_res.is_ok(),
+            "Control insert must succeed: {:?}",
+            ctrl_res.err()
+        );
 
         // Attempt insert where both debit > 0 and credit > 0
         let fail_res = conn.execute(
@@ -228,7 +237,11 @@ mod tests {
             ) VALUES ('led_ctrl_5', 'tx_1', 'acc_sales', 0, 500, 'Valid control credit')",
             [],
         );
-        assert!(ctrl_res.is_ok(), "Control insert must succeed: {:?}", ctrl_res.err());
+        assert!(
+            ctrl_res.is_ok(),
+            "Control insert must succeed: {:?}",
+            ctrl_res.err()
+        );
 
         // Attempt insert where both debit == 0 and credit == 0
         let fail_res = conn.execute(
@@ -269,7 +282,11 @@ mod tests {
             ) VALUES ('led_ctrl_6', 'tx_1', 'acc_ar', 1000, 0, 'Original entry')",
             [],
         );
-        assert!(insert_res.is_ok(), "Control insert must succeed: {:?}", insert_res.err());
+        assert!(
+            insert_res.is_ok(),
+            "Control insert must succeed: {:?}",
+            insert_res.err()
+        );
 
         // UPDATE must fail with trigger text
         let update_res = conn.execute(
@@ -285,10 +302,7 @@ mod tests {
         );
 
         // DELETE must fail with trigger text
-        let delete_res = conn.execute(
-            "DELETE FROM ledger_entries WHERE id = 'led_ctrl_6'",
-            [],
-        );
+        let delete_res = conn.execute("DELETE FROM ledger_entries WHERE id = 'led_ctrl_6'", []);
         assert!(delete_res.is_err());
         let err_del = delete_res.unwrap_err().to_string();
         assert!(
@@ -314,32 +328,67 @@ mod tests {
             ) VALUES ('tx_standalone', 'POSTED', '27', '27', 'INV', 'INV/26-27/0099', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
-        assert!(insert_res.is_ok(), "Control insert must succeed: {:?}", insert_res.err());
+        assert!(
+            insert_res.is_ok(),
+            "Control insert must succeed: {:?}",
+            insert_res.err()
+        );
 
         // Verify zero child rows exist in any referencing table
-        let child_items: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM transaction_items WHERE transaction_id = 'tx_standalone'", [], |r| r.get(0)
-        ).unwrap();
-        assert_eq!(child_items, 0, "Precondition failed: transaction must have no items");
+        let child_items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transaction_items WHERE transaction_id = 'tx_standalone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_items, 0,
+            "Precondition failed: transaction must have no items"
+        );
 
-        let child_ledger: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM ledger_entries WHERE transaction_id = 'tx_standalone'", [], |r| r.get(0)
-        ).unwrap();
-        assert_eq!(child_ledger, 0, "Precondition failed: transaction must have no ledger rows");
+        let child_ledger: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ledger_entries WHERE transaction_id = 'tx_standalone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_ledger, 0,
+            "Precondition failed: transaction must have no ledger rows"
+        );
 
-        let child_allocs: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM payment_allocations WHERE transaction_id = 'tx_standalone'", [], |r| r.get(0)
-        ).unwrap();
-        assert_eq!(child_allocs, 0, "Precondition failed: transaction must have no allocations");
+        let child_allocs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM payment_allocations WHERE transaction_id = 'tx_standalone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_allocs, 0,
+            "Precondition failed: transaction must have no allocations"
+        );
 
-        let child_stock: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM stock_movements WHERE transaction_id = 'tx_standalone'", [], |r| r.get(0)
-        ).unwrap();
-        assert_eq!(child_stock, 0, "Precondition failed: transaction must have no stock movements");
+        let child_stock: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM stock_movements WHERE transaction_id = 'tx_standalone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            child_stock, 0,
+            "Precondition failed: transaction must have no stock movements"
+        );
 
         // Attempt DELETE on standalone transaction -> trigger must abort
         let delete_res = conn.execute("DELETE FROM transactions WHERE id = 'tx_standalone'", []);
-        assert!(delete_res.is_err(), "DELETE on transactions must be blocked by trigger");
+        assert!(
+            delete_res.is_err(),
+            "DELETE on transactions must be blocked by trigger"
+        );
         let err_msg = delete_res.unwrap_err().to_string();
         assert!(
             err_msg.contains("IMMUTABILITY_RULE_BROKEN"),
@@ -367,7 +416,11 @@ mod tests {
             ) VALUES ('tx_ctrl_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             params![exact_16_invoice_no],
         );
-        assert!(valid_res.is_ok(), "16-character invoice_number must be accepted: {:?}", valid_res.err());
+        assert!(
+            valid_res.is_ok(),
+            "16-character invoice_number must be accepted: {:?}",
+            valid_res.err()
+        );
 
         // 17 characters long invoice number must fail check constraint
         let long_invoice_no = "INV/2026-27/00001";
@@ -402,7 +455,11 @@ mod tests {
              VALUES ('s_ctrl_9', 'TAX_INV', '26-27', 'INV/26-27/', 1)",
             [],
         );
-        assert!(ctrl_res.is_ok(), "Control insert must succeed: {:?}", ctrl_res.err());
+        assert!(
+            ctrl_res.is_ok(),
+            "Control insert must succeed: {:?}",
+            ctrl_res.err()
+        );
 
         // Attempting duplicate insert fails unique constraint
         let dup_res = conn.execute(
@@ -441,7 +498,12 @@ mod tests {
             [],
         );
         assert!(res_err.is_err());
-        assert!(res_err.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            res_err
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // --- Transactions ---
         // Positive control
@@ -467,7 +529,12 @@ mod tests {
             [],
         );
         assert!(tx_err.is_err());
-        assert!(tx_err.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            tx_err
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // --- Ledger Entries ---
         conn.execute(
@@ -497,7 +564,12 @@ mod tests {
             [],
         );
         assert!(led_neg_debit.is_err());
-        assert!(led_neg_debit.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            led_neg_debit
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // Negative credit_paise fails
         let led_neg_credit = conn.execute(
@@ -507,7 +579,12 @@ mod tests {
             [],
         );
         assert!(led_neg_credit.is_err());
-        assert!(led_neg_credit.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            led_neg_credit
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // --- Payments ---
         // Positive control
@@ -527,7 +604,12 @@ mod tests {
             [],
         );
         assert!(pay_neg.is_err());
-        assert!(pay_neg.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            pay_neg
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // Zero payment amount fails (must be > 0)
         let pay_zero = conn.execute(
@@ -537,7 +619,12 @@ mod tests {
             [],
         );
         assert!(pay_zero.is_err());
-        assert!(pay_zero.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            pay_zero
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
     }
 
     // 11. verify_ledger returns the ID of an unbalanced transaction and returns empty for a balanced one
@@ -562,12 +649,16 @@ mod tests {
                 id, transaction_id, account_id, debit_paise, credit_paise, narration
             ) VALUES ('led_unbal_1', 'tx_unbal', 'acc_ar', 1000, 0, 'Unbalanced debit')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let imbalanced = verify_ledger(&conn).unwrap();
         assert!(
             imbalanced.iter().any(|d| match d {
-                LedgerDiscrepancy::UnbalancedTransaction { transaction_id, net_difference_paise } => {
+                LedgerDiscrepancy::UnbalancedTransaction {
+                    transaction_id,
+                    net_difference_paise,
+                } => {
                     transaction_id == "tx_unbal" && *net_difference_paise == 1000
                 }
                 _ => false,
@@ -581,7 +672,8 @@ mod tests {
                 id, transaction_id, account_id, debit_paise, credit_paise, narration
             ) VALUES ('led_bal_2', 'tx_unbal', 'acc_sales', 0, 1000, 'Balancing credit')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let balanced = verify_ledger(&conn).unwrap();
         assert!(
@@ -664,7 +756,11 @@ mod tests {
             ) VALUES ('sm_ctrl_13', 'res_1', NULL, 'tx_stock', 'SALE', -1000)",
             [],
         );
-        assert!(ctrl_res.is_ok(), "Control insert on stock_movements must succeed: {:?}", ctrl_res.err());
+        assert!(
+            ctrl_res.is_ok(),
+            "Control insert on stock_movements must succeed: {:?}",
+            ctrl_res.err()
+        );
 
         // UPDATE must fail with trigger text
         let update_res = conn.execute(
@@ -680,10 +776,7 @@ mod tests {
         );
 
         // DELETE must fail with trigger text
-        let delete_res = conn.execute(
-            "DELETE FROM stock_movements WHERE id = 'sm_ctrl_13'",
-            [],
-        );
+        let delete_res = conn.execute("DELETE FROM stock_movements WHERE id = 'sm_ctrl_13'", []);
         assert!(delete_res.is_err());
         let err_del = delete_res.unwrap_err().to_string();
         assert!(
@@ -718,7 +811,11 @@ mod tests {
             ) VALUES ('ti_ctrl_14', 'tx_items', 'res_1', NULL, 1000, 1000, 0, 1000, 0, 0, 0, 0, 1000)",
             [],
         );
-        assert!(ctrl_res.is_ok(), "Control insert on transaction_items must succeed: {:?}", ctrl_res.err());
+        assert!(
+            ctrl_res.is_ok(),
+            "Control insert on transaction_items must succeed: {:?}",
+            ctrl_res.err()
+        );
 
         // DELETE must fail with trigger text
         let del_res = conn.execute("DELETE FROM transaction_items WHERE id = 'ti_ctrl_14'", []);
@@ -738,7 +835,9 @@ mod tests {
         seed_minimal_fixtures(&conn);
 
         // Structural check via PRAGMA foreign_key_list(ledger_entries)
-        let mut stmt = conn.prepare("PRAGMA foreign_key_list(ledger_entries)").unwrap();
+        let mut stmt = conn
+            .prepare("PRAGMA foreign_key_list(ledger_entries)")
+            .unwrap();
         let fk_rows = stmt
             .query_map([], |row| {
                 let to_table: String = row.get(2)?;
@@ -768,7 +867,10 @@ mod tests {
                 to_table
             );
         }
-        assert!(fk_count >= 3, "Expected at least 3 foreign keys (accounts, transactions, payments)");
+        assert!(
+            fk_count >= 3,
+            "Expected at least 3 foreign keys (accounts, transactions, payments)"
+        );
 
         // Functional check: Attempting to delete a referenced account fails with foreign key violation
         conn.execute(
@@ -791,10 +893,14 @@ mod tests {
                 id, transaction_id, account_id, debit_paise, credit_paise, narration
             ) VALUES ('led_fk_test', 'tx_fk_test', 'acc_locked', 1000, 0, 'Locked entry')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let del_acc_res = conn.execute("DELETE FROM accounts WHERE id = 'acc_locked'", []);
-        assert!(del_acc_res.is_err(), "Must reject deletion of account referenced by ledger_entries");
+        assert!(
+            del_acc_res.is_err(),
+            "Must reject deletion of account referenced by ledger_entries"
+        );
         let err_msg = del_acc_res.unwrap_err().to_string();
         assert!(
             err_msg.contains("FOREIGN KEY constraint failed"),
@@ -854,7 +960,10 @@ mod tests {
         ];
 
         let result = run_migrations(&mut conn, &test_migrations);
-        assert!(result.is_err(), "run_migrations must return Err when a migration fails");
+        assert!(
+            result.is_err(),
+            "run_migrations must return Err when a migration fails"
+        );
 
         // 1. First migration's state is kept
         let users_table_exists: bool = conn
@@ -868,7 +977,10 @@ mod tests {
 
         // 2. user_version equals the last successful version (1)
         let version = get_user_version(&conn).unwrap();
-        assert_eq!(version, 1, "user_version must equal 1 (the last successful migration version)");
+        assert_eq!(
+            version, 1,
+            "user_version must equal 1 (the last successful migration version)"
+        );
 
         // 3. No partial tables from the failed migration exist
         let canary_exists: bool = conn
@@ -878,7 +990,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(!canary_exists, "No partial tables from failed migration must exist");
+        assert!(
+            !canary_exists,
+            "No partial tables from failed migration must exist"
+        );
     }
 
     // 18. UPDATE on transaction_items fails
@@ -906,14 +1021,21 @@ mod tests {
             ) VALUES ('ti_ctrl_18', 'tx_item_up', 'res_1', NULL, 1000, 1000, 0, 1000, 0, 0, 0, 0, 1000)",
             [],
         );
-        assert!(ctrl_res.is_ok(), "Control insert must succeed: {:?}", ctrl_res.err());
+        assert!(
+            ctrl_res.is_ok(),
+            "Control insert must succeed: {:?}",
+            ctrl_res.err()
+        );
 
         // UPDATE must fail via trigger
         let up_res = conn.execute(
             "UPDATE transaction_items SET quantity_milli = 2000 WHERE id = 'ti_ctrl_18'",
             [],
         );
-        assert!(up_res.is_err(), "UPDATE on transaction_items must be blocked");
+        assert!(
+            up_res.is_err(),
+            "UPDATE on transaction_items must be blocked"
+        );
         let err_msg = up_res.unwrap_err().to_string();
         assert!(
             err_msg.contains("IMMUTABILITY_RULE_BROKEN"),
@@ -947,14 +1069,27 @@ mod tests {
         assert!(pay_ctrl.is_ok(), "Control payment insert must succeed");
 
         // UPDATE payments fails
-        let pay_up = conn.execute("UPDATE payments SET amount_paise = 2000 WHERE id = 'pay_ctrl_19'", []);
+        let pay_up = conn.execute(
+            "UPDATE payments SET amount_paise = 2000 WHERE id = 'pay_ctrl_19'",
+            [],
+        );
         assert!(pay_up.is_err());
-        assert!(pay_up.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            pay_up
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // DELETE payments fails
         let pay_del = conn.execute("DELETE FROM payments WHERE id = 'pay_ctrl_19'", []);
         assert!(pay_del.is_err());
-        assert!(pay_del.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            pay_del
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // Control insert payment_allocations
         let alloc_ctrl = conn.execute(
@@ -965,14 +1100,30 @@ mod tests {
         assert!(alloc_ctrl.is_ok(), "Control allocation insert must succeed");
 
         // UPDATE payment_allocations fails
-        let alloc_up = conn.execute("UPDATE payment_allocations SET amount_allocated_paise = 500 WHERE id = 'pa_ctrl_19'", []);
+        let alloc_up = conn.execute(
+            "UPDATE payment_allocations SET amount_allocated_paise = 500 WHERE id = 'pa_ctrl_19'",
+            [],
+        );
         assert!(alloc_up.is_err());
-        assert!(alloc_up.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            alloc_up
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // DELETE payment_allocations fails
-        let alloc_del = conn.execute("DELETE FROM payment_allocations WHERE id = 'pa_ctrl_19'", []);
+        let alloc_del = conn.execute(
+            "DELETE FROM payment_allocations WHERE id = 'pa_ctrl_19'",
+            [],
+        );
         assert!(alloc_del.is_err());
-        assert!(alloc_del.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            alloc_del
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
     }
 
     // 20. UPDATE of transactions.total_amount_paise fails; UPDATE of status POSTED -> CANCELLED succeeds; CANCELLED -> POSTED fails
@@ -996,18 +1147,34 @@ mod tests {
             "UPDATE transactions SET total_amount_paise = 2000 WHERE id = 'tx_guard'",
             [],
         );
-        assert!(up_amount.is_err(), "Modifying transaction amounts must be blocked");
-        assert!(up_amount.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            up_amount.is_err(),
+            "Modifying transaction amounts must be blocked"
+        );
+        assert!(
+            up_amount
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // 2. UPDATE status POSTED -> CANCELLED (all other columns unchanged) must SUCCEED
         let up_cancel = conn.execute(
             "UPDATE transactions SET status = 'CANCELLED' WHERE id = 'tx_guard'",
             [],
         );
-        assert!(up_cancel.is_ok(), "POSTED -> CANCELLED must succeed: {:?}", up_cancel.err());
+        assert!(
+            up_cancel.is_ok(),
+            "POSTED -> CANCELLED must succeed: {:?}",
+            up_cancel.err()
+        );
 
         let current_status: String = conn
-            .query_row("SELECT status FROM transactions WHERE id = 'tx_guard'", [], |r| r.get(0))
+            .query_row(
+                "SELECT status FROM transactions WHERE id = 'tx_guard'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(current_status, "CANCELLED");
 
@@ -1016,8 +1183,16 @@ mod tests {
             "UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_guard'",
             [],
         );
-        assert!(up_unfreeze.is_err(), "Reverting CANCELLED to POSTED must be rejected");
-        assert!(up_unfreeze.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            up_unfreeze.is_err(),
+            "Reverting CANCELLED to POSTED must be rejected"
+        );
+        assert!(
+            up_unfreeze
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
     }
 
     // 21. ledger_entries with transaction_id NULL and payment_id NULL fails
@@ -1048,7 +1223,10 @@ mod tests {
              VALUES ('led_ctrl_tx', 'tx_21', NULL, 'acc_ar', 1000, 0, 'Valid tx')",
             [],
         );
-        assert!(ctrl_tx.is_ok(), "Control transaction ledger entry must succeed");
+        assert!(
+            ctrl_tx.is_ok(),
+            "Control transaction ledger entry must succeed"
+        );
 
         // Control 2: payment_id not null succeeds
         let ctrl_pay = conn.execute(
@@ -1056,7 +1234,10 @@ mod tests {
              VALUES ('led_ctrl_pay', NULL, 'pay_21', 'acc_ar', 0, 1000, 'Valid pay')",
             [],
         );
-        assert!(ctrl_pay.is_ok(), "Control payment ledger entry must succeed");
+        assert!(
+            ctrl_pay.is_ok(),
+            "Control payment ledger entry must succeed"
+        );
 
         // Failure: both transaction_id and payment_id are NULL
         let fail_nulls = conn.execute(
@@ -1064,8 +1245,16 @@ mod tests {
              VALUES ('led_fail_nulls', NULL, NULL, 'acc_ar', 1000, 0, 'Invalid orphaned entry')",
             [],
         );
-        assert!(fail_nulls.is_err(), "Orphaned ledger entry must be rejected");
-        assert!(fail_nulls.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            fail_nulls.is_err(),
+            "Orphaned ledger entry must be rejected"
+        );
+        assert!(
+            fail_nulls
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
     }
 
     // 22. stock_movements with quantity_delta_milli = 0 fails
@@ -1107,7 +1296,12 @@ mod tests {
             [],
         );
         assert!(fail_zero.is_err(), "Zero quantity movement must fail");
-        assert!(fail_zero.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            fail_zero
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
     }
 
     // 23. one invalid value each for users.role, entities.entity_type, accounts.type, stock_movements.reason is rejected
@@ -1123,7 +1317,12 @@ mod tests {
             [],
         );
         assert!(user_fail.is_err());
-        assert!(user_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            user_fail
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // 2. entities.entity_type
         let ent_fail = conn.execute(
@@ -1132,7 +1331,12 @@ mod tests {
             [],
         );
         assert!(ent_fail.is_err());
-        assert!(ent_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            ent_fail
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // 3. accounts.type
         let acc_fail = conn.execute(
@@ -1141,7 +1345,12 @@ mod tests {
             [],
         );
         assert!(acc_fail.is_err());
-        assert!(acc_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            acc_fail
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // 4. stock_movements.reason
         conn.execute(
@@ -1160,7 +1369,12 @@ mod tests {
             [],
         );
         assert!(sm_fail.is_err());
-        assert!(sm_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            sm_fail
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
     }
 
     // 24. verify_ledger: unbalanced payment is found; POSTED transaction with no entries is found; a fully balanced database returns nothing
@@ -1171,7 +1385,10 @@ mod tests {
 
         // 1. Initially empty database -> fully balanced returns nothing
         let initial_issues = verify_ledger(&conn).unwrap();
-        assert!(initial_issues.is_empty(), "Empty ledger must report zero issues");
+        assert!(
+            initial_issues.is_empty(),
+            "Empty ledger must report zero issues"
+        );
 
         // 2. Insert a POSTED transaction with no ledger entries -> should be flagged
         conn.execute(
@@ -1206,7 +1423,10 @@ mod tests {
         ).unwrap();
 
         let tx_balanced_issues = verify_ledger(&conn).unwrap();
-        assert!(tx_balanced_issues.is_empty(), "Balanced transaction must clear issues");
+        assert!(
+            tx_balanced_issues.is_empty(),
+            "Balanced transaction must clear issues"
+        );
 
         // 3. Insert payment with unbalanced ledger entries -> should be flagged
         conn.execute(
@@ -1225,7 +1445,10 @@ mod tests {
         let pay_issues = verify_ledger(&conn).unwrap();
         assert!(
             pay_issues.iter().any(|d| match d {
-                LedgerDiscrepancy::UnbalancedPayment { payment_id, net_difference_paise } => {
+                LedgerDiscrepancy::UnbalancedPayment {
+                    payment_id,
+                    net_difference_paise,
+                } => {
                     payment_id == "pay_unbal" && *net_difference_paise == 500
                 }
                 _ => false,
@@ -1280,7 +1503,10 @@ mod tests {
             ) VALUES ('tx_c26_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0261', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
-        assert!(ctrl_sale.is_ok(), "Valid SALE with original_transaction_id NULL must succeed");
+        assert!(
+            ctrl_sale.is_ok(),
+            "Valid SALE with original_transaction_id NULL must succeed"
+        );
 
         // (b) SALE with non-NULL original_transaction_id FAILS
         let fail_sale_with_orig = conn.execute(
@@ -1293,7 +1519,12 @@ mod tests {
             [],
         );
         assert!(fail_sale_with_orig.is_err());
-        assert!(fail_sale_with_orig.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            fail_sale_with_orig
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // (c) SALE_RETURN with NULL original_transaction_id FAILS
         let fail_return_without_orig = conn.execute(
@@ -1306,7 +1537,12 @@ mod tests {
             [],
         );
         assert!(fail_return_without_orig.is_err());
-        assert!(fail_return_without_orig.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            fail_return_without_orig
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // (d) Valid control SALE_RETURN with non-NULL original_transaction_id succeeds
         let ctrl_return = conn.execute(
@@ -1318,7 +1554,10 @@ mod tests {
             ) VALUES ('tx_c26_4', 'POSTED', '27', '27', 'INV', 'INV/26-27/0264', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', 'tx_c26_1', '2026-10-20', 'usr_1')",
             [],
         );
-        assert!(ctrl_return.is_ok(), "Valid SALE_RETURN with original_transaction_id must succeed");
+        assert!(
+            ctrl_return.is_ok(),
+            "Valid SALE_RETURN with original_transaction_id must succeed"
+        );
 
         // (e) Bad invoice_date format FAILS
         let fail_bad_date = conn.execute(
@@ -1331,7 +1570,12 @@ mod tests {
             [],
         );
         assert!(fail_bad_date.is_err());
-        assert!(fail_bad_date.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            fail_bad_date
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
 
         // (f) round_off_paise 100 FAILS (allowed -99..99)
         let fail_round_off = conn.execute(
@@ -1344,7 +1588,12 @@ mod tests {
             [],
         );
         assert!(fail_round_off.is_err());
-        assert!(fail_round_off.unwrap_err().to_string().contains("CHECK constraint failed"));
+        assert!(
+            fail_round_off
+                .unwrap_err()
+                .to_string()
+                .contains("CHECK constraint failed")
+        );
     }
 
     // 27. guard covers all columns, allows POSTED -> CANCELLED, blocks invoice_date / transaction_type change
@@ -1411,7 +1660,12 @@ mod tests {
             [],
         );
         assert!(fail_date.is_err());
-        assert!(fail_date.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_date
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // 4. Changing transaction_type is BLOCKED
         let fail_type = conn.execute(
@@ -1419,7 +1673,12 @@ mod tests {
             [],
         );
         assert!(fail_type.is_err());
-        assert!(fail_type.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_type
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // 5. Changing status POSTED -> CANCELLED alone SUCCEEDS
         let pass_cancel = conn.execute(
@@ -1449,7 +1708,9 @@ mod tests {
         );
         assert!(fail_sub.is_err());
         let err_sub = fail_sub.unwrap_err().to_string();
-        assert!(err_sub.contains("INVARIANT_BROKEN: subtotal_paise - discount_paise must equal taxable_paise"));
+        assert!(err_sub.contains(
+            "INVARIANT_BROKEN: subtotal_paise - discount_paise must equal taxable_paise"
+        ));
 
         // (b) total != taxable + cgst + sgst + igst + round_off FAILS
         let fail_tot = conn.execute(
@@ -1491,7 +1752,10 @@ mod tests {
         );
         assert!(fail_inter_cgst.is_err());
         let err_inter = fail_inter_cgst.unwrap_err().to_string();
-        assert!(err_inter.contains("INVARIANT_BROKEN: Inter-state transaction cannot have CGST or SGST"));
+        assert!(
+            err_inter
+                .contains("INVARIANT_BROKEN: Inter-state transaction cannot have CGST or SGST")
+        );
 
         // Pass case for intra-state transaction with round off
         let pass_intra = conn.execute(
@@ -1503,7 +1767,11 @@ mod tests {
             ) VALUES ('tx_inv_pass_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0285', 'ent_1', 1000, 100, 900, 81, 81, 0, -2, 1060, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
-        assert!(pass_intra.is_ok(), "Valid intra-state insert must pass invariants: {:?}", pass_intra.err());
+        assert!(
+            pass_intra.is_ok(),
+            "Valid intra-state insert must pass invariants: {:?}",
+            pass_intra.err()
+        );
 
         // Pass case for inter-state transaction
         let pass_inter = conn.execute(
@@ -1515,7 +1783,11 @@ mod tests {
             ) VALUES ('tx_inv_pass_2', 'POSTED', '27', '29', 'INV', 'INV/26-27/0286', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
-        assert!(pass_inter.is_ok(), "Valid inter-state insert must pass invariants: {:?}", pass_inter.err());
+        assert!(
+            pass_inter.is_ok(),
+            "Valid inter-state insert must pass invariants: {:?}",
+            pass_inter.err()
+        );
 
         // --- Transaction Items Invariants ---
 
@@ -1567,7 +1839,11 @@ mod tests {
             ) VALUES ('ti_inv_pass', 'tx_inv_pass_1', 'res_1', NULL, 1000, 1000, 100, 900, 1800, 81, 81, 0, 1062)",
             [],
         );
-        assert!(pass_item.is_ok(), "Valid item insert must succeed: {:?}", pass_item.err());
+        assert!(
+            pass_item.is_ok(),
+            "Valid item insert must succeed: {:?}",
+            pass_item.err()
+        );
     }
 
     // 29. seeded accounts: all 10 exist with the right type; running migrations again does not duplicate
@@ -1607,7 +1883,11 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(code_fmt.0, 4, "length(code) must be 4 for account {}", code);
-            assert_eq!(code_fmt.1, 1, "code GLOB '[0-9][0-9][0-9][0-9]' must be 1 for account {}", code);
+            assert_eq!(
+                code_fmt.1, 1,
+                "code GLOB '[0-9][0-9][0-9][0-9]' must be 1 for account {}",
+                code
+            );
         }
 
         let initial_count: i64 = conn
@@ -1623,7 +1903,9 @@ mod tests {
         assert_eq!(second_count, 10);
 
         let mut print_stmt = conn
-            .prepare("SELECT code, length(code), typeof(code), hex(code) FROM accounts ORDER BY code")
+            .prepare(
+                "SELECT code, length(code), typeof(code), hex(code) FROM accounts ORDER BY code",
+            )
             .unwrap();
         let print_rows = print_stmt
             .query_map([], |row| {
@@ -1652,10 +1934,17 @@ mod tests {
             "UPDATE accounts SET code = '1098', type = 'LIABILITY' WHERE id = 'acc_ar'",
             [],
         );
-        assert!(update_free.is_ok(), "Updating unused account code and type must succeed");
+        assert!(
+            update_free.is_ok(),
+            "Updating unused account code and type must succeed"
+        );
 
         // Revert back
-        conn.execute("UPDATE accounts SET code = '1001', type = 'ASSET' WHERE id = 'acc_ar'", []).unwrap();
+        conn.execute(
+            "UPDATE accounts SET code = '1001', type = 'ASSET' WHERE id = 'acc_ar'",
+            [],
+        )
+        .unwrap();
 
         // (b) Create a transaction and ledger entry referencing acc_ar
         conn.execute(
@@ -1675,12 +1964,14 @@ mod tests {
         ).unwrap();
 
         // (c) Now updating code on acc_ar is BLOCKED
-        let fail_code = conn.execute(
-            "UPDATE accounts SET code = '9999' WHERE id = 'acc_ar'",
-            [],
-        );
+        let fail_code = conn.execute("UPDATE accounts SET code = '9999' WHERE id = 'acc_ar'", []);
         assert!(fail_code.is_err());
-        assert!(fail_code.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_code
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (d) Updating type on acc_ar is BLOCKED
         let fail_type = conn.execute(
@@ -1688,14 +1979,22 @@ mod tests {
             [],
         );
         assert!(fail_type.is_err());
-        assert!(fail_type.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_type
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (e) Updating name on acc_ar is still ALLOWED
         let pass_name = conn.execute(
             "UPDATE accounts SET name = 'Trade Receivables' WHERE id = 'acc_ar'",
             [],
         );
-        assert!(pass_name.is_ok(), "Updating name must be allowed even with ledger entries");
+        assert!(
+            pass_name.is_ok(),
+            "Updating name must be allowed even with ledger entries"
+        );
     }
 
     // 31. number_series: +2 fails, decrement fails, prefix change after issuance fails, +1 passes, DELETE fails, is_active toggle passes
@@ -1714,14 +2013,22 @@ mod tests {
             "UPDATE number_series SET next_number = next_number + 1 WHERE id = 'ns_test'",
             [],
         );
-        assert!(pass_inc.is_ok(), "Incrementing next_number by exactly 1 must pass: {:?}", pass_inc.err());
+        assert!(
+            pass_inc.is_ok(),
+            "Incrementing next_number by exactly 1 must pass: {:?}",
+            pass_inc.err()
+        );
 
         // 2. is_active toggle passes
         let pass_toggle = conn.execute(
             "UPDATE number_series SET is_active = 0 WHERE id = 'ns_test'",
             [],
         );
-        assert!(pass_toggle.is_ok(), "Toggling is_active must pass: {:?}", pass_toggle.err());
+        assert!(
+            pass_toggle.is_ok(),
+            "Toggling is_active must pass: {:?}",
+            pass_toggle.err()
+        );
 
         // 3. +2 fails
         let fail_plus_two = conn.execute(
@@ -1729,7 +2036,12 @@ mod tests {
             [],
         );
         assert!(fail_plus_two.is_err());
-        assert!(fail_plus_two.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_plus_two
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // 4. decrement fails
         let fail_dec = conn.execute(
@@ -1737,7 +2049,12 @@ mod tests {
             [],
         );
         assert!(fail_dec.is_err());
-        assert!(fail_dec.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_dec
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // 5. prefix change fails
         let fail_prefix = conn.execute(
@@ -1745,12 +2062,22 @@ mod tests {
             [],
         );
         assert!(fail_prefix.is_err());
-        assert!(fail_prefix.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_prefix
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // 6. DELETE fails
         let fail_del = conn.execute("DELETE FROM number_series WHERE id = 'ns_test'", []);
         assert!(fail_del.is_err());
-        assert!(fail_del.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_del
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
     }
 
     // 32. database with user_version 99 makes run_migrations return Err, unchanged
@@ -1765,7 +2092,10 @@ mod tests {
 
         // Attempt running migrations
         let res = run_migrations(&mut conn, MIGRATIONS);
-        assert!(res.is_err(), "run_migrations must return Err when user_version > highest migration");
+        assert!(
+            res.is_err(),
+            "run_migrations must return Err when user_version > highest migration"
+        );
 
         // Assert user_version remains 99 and unchanged
         assert_eq!(get_user_version(&conn).unwrap(), 99);
@@ -1791,7 +2121,8 @@ mod tests {
                 'SALE', NULL, '2026-10-20', 'usr_1'
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_tx_rep = conn.execute(
@@ -1808,10 +2139,21 @@ mod tests {
             [],
         );
         assert!(fail_tx_rep.is_err());
-        assert!(fail_tx_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_tx_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let tx_tot: i64 = conn.query_row("SELECT total_amount_paise FROM transactions WHERE id = 'tx_rep_1'", [], |r| r.get(0)).unwrap();
+        let tx_tot: i64 = conn
+            .query_row(
+                "SELECT total_amount_paise FROM transactions WHERE id = 'tx_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(tx_tot, 1000);
 
         // 2. transaction_items
@@ -1827,7 +2169,8 @@ mod tests {
                 0, 0, 0, 1000
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_ti_rep = conn.execute(
@@ -1843,10 +2186,21 @@ mod tests {
             [],
         );
         assert!(fail_ti_rep.is_err());
-        assert!(fail_ti_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_ti_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let ti_qty: i64 = conn.query_row("SELECT quantity_milli FROM transaction_items WHERE id = 'ti_rep_1'", [], |r| r.get(0)).unwrap();
+        let ti_qty: i64 = conn
+            .query_row(
+                "SELECT quantity_milli FROM transaction_items WHERE id = 'ti_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(ti_qty, 1000);
 
         // 3. stock_movements
@@ -1858,7 +2212,8 @@ mod tests {
                 'sm_rep_1', 'res_1', NULL, 'tx_rep_1', 'SALE', -1000
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_sm_rep = conn.execute(
@@ -1870,10 +2225,21 @@ mod tests {
             [],
         );
         assert!(fail_sm_rep.is_err());
-        assert!(fail_sm_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_sm_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let sm_qty: i64 = conn.query_row("SELECT quantity_delta_milli FROM stock_movements WHERE id = 'sm_rep_1'", [], |r| r.get(0)).unwrap();
+        let sm_qty: i64 = conn
+            .query_row(
+                "SELECT quantity_delta_milli FROM stock_movements WHERE id = 'sm_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(sm_qty, -1000);
 
         // 4. ledger_entries
@@ -1885,7 +2251,8 @@ mod tests {
                 'le_rep_1', 'tx_rep_1', NULL, 'acc_ar', 1000, 0, 'Control entry'
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_le_rep = conn.execute(
@@ -1897,10 +2264,21 @@ mod tests {
             [],
         );
         assert!(fail_le_rep.is_err());
-        assert!(fail_le_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_le_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let le_dbt: i64 = conn.query_row("SELECT debit_paise FROM ledger_entries WHERE id = 'le_rep_1'", [], |r| r.get(0)).unwrap();
+        let le_dbt: i64 = conn
+            .query_row(
+                "SELECT debit_paise FROM ledger_entries WHERE id = 'le_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(le_dbt, 1000);
 
         // 5. payments
@@ -1912,7 +2290,8 @@ mod tests {
                 'pay_rep_1', 'PAY/26-27/0001', 'ent_1', 'CASH', 1000, 'usr_1'
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_pay_rep = conn.execute(
@@ -1924,10 +2303,21 @@ mod tests {
             [],
         );
         assert!(fail_pay_rep.is_err());
-        assert!(fail_pay_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_pay_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let pay_amt: i64 = conn.query_row("SELECT amount_paise FROM payments WHERE id = 'pay_rep_1'", [], |r| r.get(0)).unwrap();
+        let pay_amt: i64 = conn
+            .query_row(
+                "SELECT amount_paise FROM payments WHERE id = 'pay_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(pay_amt, 1000);
 
         // 6. payment_allocations
@@ -1939,7 +2329,8 @@ mod tests {
                 'pa_rep_1', 'pay_rep_1', 'tx_rep_1', 1000
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_pa_rep = conn.execute(
@@ -1951,10 +2342,21 @@ mod tests {
             [],
         );
         assert!(fail_pa_rep.is_err());
-        assert!(fail_pa_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_pa_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let pa_amt: i64 = conn.query_row("SELECT amount_allocated_paise FROM payment_allocations WHERE id = 'pa_rep_1'", [], |r| r.get(0)).unwrap();
+        let pa_amt: i64 = conn
+            .query_row(
+                "SELECT amount_allocated_paise FROM payment_allocations WHERE id = 'pa_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(pa_amt, 1000);
 
         // 7. number_series
@@ -1966,7 +2368,8 @@ mod tests {
                 'ns_rep_1', 'REP_SER', '2026-2027', 'REP/', 10, 4, 1
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_ns_rep = conn.execute(
@@ -1978,10 +2381,21 @@ mod tests {
             [],
         );
         assert!(fail_ns_rep.is_err());
-        assert!(fail_ns_rep.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_ns_rep
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
         // (c) Original row is unchanged
-        let ns_num: i64 = conn.query_row("SELECT next_number FROM number_series WHERE id = 'ns_rep_1'", [], |r| r.get(0)).unwrap();
+        let ns_num: i64 = conn
+            .query_row(
+                "SELECT next_number FROM number_series WHERE id = 'ns_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(ns_num, 10);
 
         // --- Replace-by-unique-key attacks ---
@@ -1996,11 +2410,28 @@ mod tests {
             [],
         );
         assert!(fail_ns_attack.is_err());
-        assert!(fail_ns_attack.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_ns_attack
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
-        let orig_ns_num: i64 = conn.query_row("SELECT next_number FROM number_series WHERE id = 'ns_rep_1'", [], |r| r.get(0)).unwrap();
+        let orig_ns_num: i64 = conn
+            .query_row(
+                "SELECT next_number FROM number_series WHERE id = 'ns_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(orig_ns_num, 10);
-        let ns_attack_count: i64 = conn.query_row("SELECT COUNT(*) FROM number_series WHERE id = 'ns_rep_attack'", [], |r| r.get(0)).unwrap();
+        let ns_attack_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM number_series WHERE id = 'ns_rep_attack'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(ns_attack_count, 0);
 
         // (ii) transactions: INSERT OR REPLACE with new id but same invoice_number
@@ -2018,11 +2449,28 @@ mod tests {
             [],
         );
         assert!(fail_tx_attack.is_err());
-        assert!(fail_tx_attack.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+        assert!(
+            fail_tx_attack
+                .unwrap_err()
+                .to_string()
+                .contains("IMMUTABILITY_RULE_BROKEN")
+        );
 
-        let orig_tx_tot: i64 = conn.query_row("SELECT total_amount_paise FROM transactions WHERE id = 'tx_rep_1'", [], |r| r.get(0)).unwrap();
+        let orig_tx_tot: i64 = conn
+            .query_row(
+                "SELECT total_amount_paise FROM transactions WHERE id = 'tx_rep_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(orig_tx_tot, 1000);
-        let tx_attack_count: i64 = conn.query_row("SELECT COUNT(*) FROM transactions WHERE id = 'tx_rep_attack'", [], |r| r.get(0)).unwrap();
+        let tx_attack_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transactions WHERE id = 'tx_rep_attack'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(tx_attack_count, 0);
     }
 }

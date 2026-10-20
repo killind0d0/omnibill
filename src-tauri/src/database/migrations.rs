@@ -413,6 +413,7 @@ INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_1000', '1000'
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_1010', '1010', 'Bank and Digital Receipts', 'ASSET');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_1100', '1100', 'Accounts Receivable', 'ASSET');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_1200', '1200', 'Inventory', 'ASSET');
+INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_2000', '2000', 'Accounts Payable', 'LIABILITY');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_2100', '2100', 'Output CGST', 'LIABILITY');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_2110', '2110', 'Output SGST', 'LIABILITY');
 INSERT OR IGNORE INTO accounts (id, code, name, type) VALUES ('acc_2120', '2120', 'Output IGST', 'LIABILITY');
