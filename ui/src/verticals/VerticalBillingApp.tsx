@@ -91,12 +91,20 @@ export const VerticalBillingApp: React.FC<VerticalBillingAppProps> = ({
         </div>
       </header>
 
-      {/* ACTIVE VERTICAL WORKSPACE */}
+      {/* ACTIVE VERTICAL WORKSPACE - Preserves Cart State Across Verticals */}
       <main className="flex-1 overflow-hidden relative">
-        {currentVertical === 'RETAIL' && <RetailPOS />}
-        {currentVertical === 'WHOLESALE' && <WholesaleBilling />}
-        {currentVertical === 'SCHOOL' && <SchoolBilling />}
-        {currentVertical === 'HOSPITAL' && <HospitalBilling />}
+        <div className={`h-full w-full ${currentVertical === 'RETAIL' ? '' : 'hidden'}`}>
+          <RetailPOS />
+        </div>
+        <div className={`h-full w-full ${currentVertical === 'WHOLESALE' ? '' : 'hidden'}`}>
+          <WholesaleBilling />
+        </div>
+        <div className={`h-full w-full ${currentVertical === 'SCHOOL' ? '' : 'hidden'}`}>
+          <SchoolBilling />
+        </div>
+        <div className={`h-full w-full ${currentVertical === 'HOSPITAL' ? '' : 'hidden'}`}>
+          <HospitalBilling />
+        </div>
       </main>
 
       {/* FOOTER SHORTCUT HELPER STRIP */}

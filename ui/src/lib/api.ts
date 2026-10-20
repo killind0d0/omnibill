@@ -283,6 +283,14 @@ class PosStorage {
 
 export const posStorage = new PosStorage();
 
+export const getDbPath = (): string => {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('omnibill_db_path');
+    if (custom) return custom;
+  }
+  return 'omnibill.db';
+};
+
 /**
  * High-level API calls with Tauri IPC invocation and browser fallback
  */
@@ -290,10 +298,23 @@ export async function apiGetProducts(): Promise<ResourceItem[]> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const result = await invoke<ResourceItem[]>('list_resources');
-      if (result && result.length > 0) return result;
-    } catch {
-      // fallback to offline storage
+      const records = await invoke<any[]>('cmd_get_resources', { db_path: getDbPath() });
+      if (Array.isArray(records) && records.length > 0) {
+        return records.map((r) => ({
+          id: r.id,
+          sku: r.sku_or_code,
+          barcode: r.sku_or_code,
+          name: r.name,
+          hsn: r.hsn_sac,
+          unit: 'pcs',
+          tax_rate_bps: r.tax_rate_bps,
+          base_price_paise: r.base_price_paise,
+          cost_price_paise: r.cost_price_paise,
+          stock_milli: r.current_stock_milli,
+        }));
+      }
+    } catch (err: any) {
+      console.error('IPC cmd_get_resources failed:', err);
     }
   }
   return posStorage.getProducts();
@@ -312,11 +333,14 @@ export async function apiGetBusinessProfile(): Promise<BusinessProfile> {
   return posStorage.getBusinessProfile();
 }
 
-export async function apiPostSale(sale: CompletedSale): Promise<{ success: boolean; invoice_number: string }> {
+export async function apiPostSale(
+  sale: CompletedSale
+): Promise<{ success: boolean; invoice_number: string; error?: string }> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const res = await invoke<{ transaction_id: string; invoice_number: string }>('post_sale', {
+      const res = await invoke<{ transaction_id: string; invoice_number: string }>('cmd_post_sale', {
+        db_path: getDbPath(),
         input: {
           invoice_date: sale.invoice_date,
           seller_state_code: sale.seller_state_code,
@@ -332,12 +356,16 @@ export async function apiPostSale(sale: CompletedSale): Promise<{ success: boole
           })),
         },
       });
+
       if (res?.invoice_number) {
         sale.invoice_number = res.invoice_number;
         sale.transaction_id = res.transaction_id;
       }
-    } catch (err) {
-      console.warn('Tauri post_sale call failed, committing to offline storage:', err);
+    } catch (err: any) {
+      const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
+      console.error('Tauri cmd_post_sale failed:', errMsg);
+      // Return genuine failure result to alert UI
+      return { success: false, invoice_number: sale.invoice_number, error: errMsg };
     }
   }
 
@@ -354,13 +382,27 @@ export async function apiPostPurchase(purchase: {
     quantity_milli: number;
     cost_price_paise: number;
   }>;
-}): Promise<{ success: boolean }> {
+}): Promise<{ success: boolean; error?: string }> {
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('post_purchase', { input: purchase });
-    } catch (err) {
-      console.warn('Tauri post_purchase call failed, committing to offline storage:', err);
+      await invoke('cmd_post_purchase', {
+        db_path: getDbPath(),
+        input: {
+          supplier: purchase.supplier,
+          invoice_number: purchase.invoice_number,
+          invoice_date: purchase.invoice_date,
+          lines: purchase.lines.map((l) => ({
+            resource_id: l.resource_id,
+            quantity_milli: l.quantity_milli,
+            cost_price_paise: l.cost_price_paise,
+          })),
+        },
+      });
+    } catch (err: any) {
+      const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
+      console.error('Tauri cmd_post_purchase failed:', errMsg);
+      return { success: false, error: errMsg };
     }
   }
 

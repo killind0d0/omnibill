@@ -35,7 +35,7 @@ import {
   HospitalBillMeta,
 } from './types';
 import { VerticalIPCBridge } from './ipc';
-import { computeSaleTotals, formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
 
 export const HospitalBilling: React.FC = () => {
   // State
@@ -489,7 +489,7 @@ export const HospitalBilling: React.FC = () => {
                       className="w-10 px-1 py-0.5 bg-slate-900 border border-slate-700 rounded text-center font-mono"
                     />
                     <span className="font-mono font-bold text-slate-200">
-                      {formatPaise((line.unit_price_paise * line.quantity_milli) / 1000)}
+                      {formatPaise(computeLineSubtotalPaise(line.unit_price_paise, line.quantity_milli))}
                     </span>
                     <button
                       onClick={() => removeClinicalItem(line.id)}
@@ -827,7 +827,7 @@ export const HospitalBilling: React.FC = () => {
                         {formatPaise(l.unit_price_paise, false)}
                       </td>
                       <td className="p-1.5 text-right font-bold font-mono">
-                        {formatPaise((l.unit_price_paise * l.quantity_milli) / 1000, false)}
+                        {formatPaise(computeLineSubtotalPaise(l.unit_price_paise, l.quantity_milli), false)}
                       </td>
                     </tr>
                   ))}

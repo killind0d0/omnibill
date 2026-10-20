@@ -136,6 +136,7 @@ pub fn verify_ledger(conn: &Connection) -> Result<Vec<LedgerDiscrepancy>> {
         "SELECT t.id
          FROM transactions t
          WHERE t.status = 'POSTED'
+           AND t.total_amount_paise > 0
            AND NOT EXISTS (
                SELECT 1 FROM ledger_entries l WHERE l.transaction_id = t.id
            )",

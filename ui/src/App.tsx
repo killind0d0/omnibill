@@ -206,15 +206,47 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Main View Router Outlet */}
-      <main className="flex-1 flex overflow-hidden">
-        {currentRoute === 'POS' && <LightningPOS />}
-        {currentRoute === 'VERTICALS' && (
+      {/* Main View Router Outlet - Preserves State on Tab Switch */}
+      <main className="flex-1 flex overflow-hidden relative">
+        <div
+          className={`h-full w-full flex-1 flex overflow-hidden ${
+            currentRoute === 'POS' ? '' : 'hidden'
+          }`}
+        >
+          <LightningPOS />
+        </div>
+
+        <div
+          className={`h-full w-full flex-1 flex overflow-hidden ${
+            currentRoute === 'VERTICALS' ? '' : 'hidden'
+          }`}
+        >
           <VerticalBillingApp onNavigateHome={() => setCurrentRoute('POS')} />
-        )}
-        {currentRoute === 'ITEM_MASTER' && <ItemMaster />}
-        {currentRoute === 'ENTITY_LEDGER' && <EntityLedger />}
-        {currentRoute === 'REPORTS' && <ReportsDashboard />}
+        </div>
+
+        <div
+          className={`h-full w-full flex-1 flex overflow-hidden ${
+            currentRoute === 'ITEM_MASTER' ? '' : 'hidden'
+          }`}
+        >
+          <ItemMaster />
+        </div>
+
+        <div
+          className={`h-full w-full flex-1 flex overflow-hidden ${
+            currentRoute === 'ENTITY_LEDGER' ? '' : 'hidden'
+          }`}
+        >
+          <EntityLedger />
+        </div>
+
+        <div
+          className={`h-full w-full flex-1 flex overflow-hidden ${
+            currentRoute === 'REPORTS' ? '' : 'hidden'
+          }`}
+        >
+          <ReportsDashboard />
+        </div>
       </main>
     </div>
   );

@@ -144,20 +144,28 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, BackupError> {
     let trimmed = hex.trim();
-    if !trimmed.len().is_multiple_of(2) {
+    if !trimmed.is_ascii() {
+        return Err(BackupError::InvalidHeader(
+            "Hex string contains non-ASCII characters".into(),
+        ));
+    }
+    let bytes = trimmed.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return Err(BackupError::InvalidHeader(format!(
             "Invalid hex length: {}",
-            trimmed.len()
+            bytes.len()
         )));
     }
-    let mut bytes = Vec::with_capacity(trimmed.len() / 2);
-    for i in (0..trimmed.len()).step_by(2) {
-        let byte = u8::from_str_radix(&trimmed[i..i + 2], 16).map_err(|e| {
-            BackupError::InvalidHeader(format!("Invalid hex character at index {}: {}", i, e))
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.as_chunks::<2>().0 {
+        let s = std::str::from_utf8(chunk)
+            .map_err(|_| BackupError::InvalidHeader("Invalid UTF-8 in hex".into()))?;
+        let byte = u8::from_str_radix(s, 16).map_err(|e| {
+            BackupError::InvalidHeader(format!("Invalid hex byte '{}': {}", s, e))
         })?;
-        bytes.push(byte);
+        out.push(byte);
     }
-    Ok(bytes)
+    Ok(out)
 }
 
 fn compute_sha256(data: &[u8]) -> String {
@@ -444,39 +452,26 @@ pub fn restore_backup(
         payload.to_vec()
     };
 
-    // 8. Restore DB to target path via temporary file and Online Backup API
+    // 8. Write decrypted database bytes to temporary file
     let temp_dir = std::env::temp_dir();
     let temp_restore_path = temp_dir.join(format!("omnibill_restore_{}.tmp", Uuid::new_v4()));
     let _guard = TempFileGuard::new(temp_restore_path.clone());
 
     fs::write(&temp_restore_path, &raw_db_bytes)?;
 
-    if let Some(parent) = Path::new(target_db_path).parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
-    }
+    // 9. Verify temporary DB integrity BEFORE touching target DB
+    let src_temp = Connection::open(&temp_restore_path)?;
+    apply_pragmas(&src_temp)?;
 
-    {
-        let src_temp = Connection::open(&temp_restore_path)?;
-        let mut target_conn = Connection::open(target_db_path)?;
-        let backup = rusqlite::backup::Backup::new(&src_temp, &mut target_conn)?;
-        backup.run_to_completion(100, Duration::from_millis(1), None)?;
-    }
-
-    // 9. Verify target DB integrity: pragmas, user_version, verify_ledger
-    let target_conn = Connection::open(target_db_path)?;
-    apply_pragmas(&target_conn)?;
-
-    let integrity: String = target_conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+    let integrity: String = src_temp.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     if integrity != "ok" {
         return Err(BackupError::IntegrityCheckFailed(format!(
-            "PRAGMA integrity_check failed: {}",
+            "PRAGMA integrity_check failed on restored data: {}",
             integrity
         )));
     }
 
-    let restored_version = get_user_version(&target_conn)?;
+    let restored_version = get_user_version(&src_temp)?;
     if schema_version > 0 && restored_version != schema_version {
         return Err(BackupError::IntegrityCheckFailed(format!(
             "Restored database user_version ({}) does not match backup schema_version ({})",
@@ -484,11 +479,27 @@ pub fn restore_backup(
         )));
     }
 
-    // Run double-entry consistency audit
-    let discrepancies = verify_ledger(&target_conn)?;
+    // Run double-entry consistency audit on temporary database
+    let discrepancies = verify_ledger(&src_temp)?;
     if !discrepancies.is_empty() {
         return Err(BackupError::LedgerVerificationFailed(discrepancies));
     }
+
+    // 10. All checks passed on temporary DB! Now safely write to target path.
+    if let Some(parent) = Path::new(target_db_path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    {
+        let mut target_conn = Connection::open(target_db_path)?;
+        let backup = rusqlite::backup::Backup::new(&src_temp, &mut target_conn)?;
+        backup.run_to_completion(100, Duration::from_millis(1), None)?;
+    }
+
+    let target_conn = Connection::open(target_db_path)?;
+    apply_pragmas(&target_conn)?;
 
     Ok(RestoreSummary {
         backup_id,

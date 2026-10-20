@@ -67,7 +67,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
     if (lines.length === 0) return;
     setIsSubmitting(true);
     try {
-      await apiPostPurchase({
+      const res = await apiPostPurchase({
         supplier,
         invoice_number: invNumber,
         invoice_date: businessDate,
@@ -77,6 +77,11 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
           cost_price_paise: l.cost_price_paise,
         })),
       });
+
+      if (!res.success) {
+        alert(`Failed to post purchase: ${res.error || 'Unknown error'}`);
+        return;
+      }
 
       setSuccessMessage(`Purchase ${invNumber} posted successfully! Inventory updated.`);
       setLines([]);

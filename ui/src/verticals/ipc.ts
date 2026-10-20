@@ -14,6 +14,7 @@ import {
   PaymentDetails,
   EWayBillDetails,
 } from './types';
+import { getDbPath } from '../lib/api';
 
 // Detect whether running in Tauri desktop runtime
 declare global {
@@ -607,17 +608,20 @@ export const VerticalIPCBridge = {
     if (isTauri()) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const res = await invoke('get_entities', { entity_type: entityType });
-        if (Array.isArray(res) && res.length > 0) return res;
+        const res = await invoke<any[]>('cmd_get_entities', { db_path: getDbPath() });
+        if (Array.isArray(res) && res.length > 0) {
+          const filtered = res.filter((e) => e.entity_type === entityType);
+          if (filtered.length > 0) return filtered;
+        }
       } catch (err) {
-        console.warn('Tauri get_entities invoke failed, falling back to local store:', err);
+        console.warn('Tauri cmd_get_entities invoke failed:', err);
       }
     }
 
-    // Local fallback
-    if (entityType === 'CUSTOMER') return currentState.customers;
-    if (entityType === 'STUDENT') return currentState.students;
-    if (entityType === 'PATIENT') return currentState.patients;
+    // Local fallback with deep cloning to prevent shared reference mutation
+    if (entityType === 'CUSTOMER') return currentState.customers.map((c) => ({ ...c }));
+    if (entityType === 'STUDENT') return currentState.students.map((s) => ({ ...s }));
+    if (entityType === 'PATIENT') return currentState.patients.map((p) => ({ ...p }));
     return [];
   },
 
@@ -628,9 +632,21 @@ export const VerticalIPCBridge = {
     if (isTauri()) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('save_entity', { entity });
+        await invoke('cmd_create_entity', {
+          db_path: getDbPath(),
+          input: {
+            id: entity.id,
+            entity_code: entity.entity_code,
+            entity_type: entity.entity_type,
+            full_name: 'full_name' in entity ? entity.full_name : '',
+            phone: 'phone' in entity ? entity.phone : undefined,
+            gstin: 'gstin' in entity ? entity.gstin : undefined,
+            state_code: entity.state_code || '27',
+          },
+        });
       } catch (err) {
-        console.warn('Tauri save_entity invoke error, using local fallback:', err);
+        console.error('Tauri cmd_create_entity invoke error:', err);
+        throw new Error(`Failed to create entity: ${err}`);
       }
     }
 
@@ -714,7 +730,7 @@ export const VerticalIPCBridge = {
       created_at: now.toISOString(),
     };
 
-    // If running inside Tauri desktop app, bridge into `post_sale` and `post_payment`
+    // If running inside Tauri desktop app, bridge into `cmd_post_sale` and `cmd_post_payment`
     if (isTauri()) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
@@ -728,7 +744,8 @@ export const VerticalIPCBridge = {
           tax_rate_bps: l.tax_rate_bps,
         }));
 
-        await invoke('post_sale', {
+        const postedSale = await invoke<any>('cmd_post_sale', {
+          db_path: getDbPath(),
           input: {
             invoice_date: invoiceDate,
             seller_state_code: '27',
@@ -739,26 +756,50 @@ export const VerticalIPCBridge = {
           },
         });
 
+        if (postedSale?.invoice_number) {
+          receipt.invoice_number = postedSale.invoice_number;
+          receipt.transaction_id = postedSale.transaction_id;
+        }
+
+        const modeMap: Record<string, string> = {
+          CASH: 'Cash',
+          UPI: 'Upi',
+          CARD: 'Card',
+          BANK_TRANSFER: 'BankTransfer',
+        };
+
         // Also post immediate payment allocation
-        await invoke('post_payment', {
+        await invoke('cmd_post_payment', {
+          db_path: getDbPath(),
           input: {
             entity_id: payload.entityId,
-            payment_mode: payload.payment.mode,
+            payment_mode: modeMap[payload.payment.mode] || 'Cash',
             amount_paise: payload.payment.amount_tendered_paise,
-            reference_number: payload.payment.reference_number || invoiceNumber,
-            allocations: [{ invoice_number: invoiceNumber, amount_allocated_paise: payload.totals.total_amount_paise }],
+            reference_number: payload.payment.reference_number || receipt.invoice_number,
+            allocations: [
+              {
+                invoice_number: receipt.invoice_number,
+                amount_allocated_paise: payload.totals.total_amount_paise,
+              },
+            ],
           },
         });
-      } catch (err) {
-        console.warn('Tauri post_sale invoke error, saved in memory/local store:', err);
+      } catch (err: any) {
+        const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
+        console.error('Tauri IPC transaction error:', errMsg);
+        throw new Error(`Transaction failed in SQLite backend: ${errMsg}`);
       }
     }
 
     // Update customer outstanding balance if credit was used
     if (payload.entityType === 'CUSTOMER' && payload.payment.mode === 'BANK_TRANSFER') {
-      const cust = currentState.customers.find((c) => c.id === payload.entityId);
-      if (cust) {
-        cust.current_balance_paise += payload.totals.total_amount_paise;
+      const idx = currentState.customers.findIndex((c) => c.id === payload.entityId);
+      if (idx !== -1) {
+        currentState.customers[idx] = {
+          ...currentState.customers[idx],
+          current_balance_paise:
+            currentState.customers[idx].current_balance_paise + payload.totals.total_amount_paise,
+        };
       }
     }
 

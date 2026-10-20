@@ -3,27 +3,22 @@ import { useEffect, useRef } from 'react';
 export interface BarcodeScannerOptions {
   onScan: (barcode: string) => void;
   minChars?: number;
-  maxIntervalMs?: number; // max time between keystrokes to be considered barcode scan (default 50ms)
+  maxIntervalMs?: number; // max time between keystrokes to be considered barcode scan (default 60ms)
+  debounceMs?: number;    // debounce against duplicate reads (default 300ms)
   enabled?: boolean;
 }
 
-/**
- * Global Keyboard Wedge Barcode Scanner Listener.
- *
- * Hardware barcode scanners emulate USB/Bluetooth HID keyboards, sending characters
- * in rapid succession (< 30-50ms) followed by an 'Enter' key.
- *
- * This hook captures that keystroke stream even when focus is not inside an input,
- * or even when inside an input, cleanly dispatching `onScan(barcode)`.
- */
 export function useBarcodeScanner({
   onScan,
   minChars = 3,
   maxIntervalMs = 60,
+  debounceMs = 300,
   enabled = true,
 }: BarcodeScannerOptions) {
   const bufferRef = useRef<string[]>([]);
   const lastKeyTimeRef = useRef<number>(0);
+  const lastScanTimeRef = useRef<number>(0);
+  const lastScannedBarcodeRef = useRef<string>('');
   const onScanRef = useRef(onScan);
 
   useEffect(() => {
@@ -50,15 +45,35 @@ export function useBarcodeScanner({
 
       if (e.key === 'Enter') {
         if (bufferRef.current.length >= minChars) {
-          // Rapid keystrokes followed by Enter: it's a barcode scan!
           const barcode = bufferRef.current.join('').trim();
           bufferRef.current = [];
 
           if (barcode.length >= minChars) {
-            // Prevent default form submit or newline
+            // Intercept and prevent default Enter actions
             e.preventDefault();
             e.stopPropagation();
-            onScanRef.current(barcode);
+
+            // 300ms debounce guard against duplicate scans
+            const isDuplicate =
+              now - lastScanTimeRef.current < debounceMs &&
+              lastScannedBarcodeRef.current === barcode;
+
+            if (!isDuplicate) {
+              lastScanTimeRef.current = now;
+              lastScannedBarcodeRef.current = barcode;
+
+              // Clear active input value if focused during wedge scan
+              if (
+                document.activeElement &&
+                (document.activeElement instanceof HTMLInputElement ||
+                  document.activeElement instanceof HTMLTextAreaElement)
+              ) {
+                document.activeElement.value = '';
+                document.activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+
+              onScanRef.current(barcode);
+            }
           }
         } else {
           bufferRef.current = [];
@@ -66,7 +81,7 @@ export function useBarcodeScanner({
         return;
       }
 
-      // Only accumulate printable single characters
+      // Accumulate printable characters
       if (e.key.length === 1) {
         bufferRef.current.push(e.key);
       }
@@ -76,5 +91,5 @@ export function useBarcodeScanner({
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, [enabled, minChars, maxIntervalMs]);
+  }, [enabled, minChars, maxIntervalMs, debounceMs]);
 }

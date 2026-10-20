@@ -1,6 +1,25 @@
 use super::PostingError;
 use rusqlite::params;
 
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
 /// Derives the Indian Financial Year string from an invoice date `YYYY-MM-DD`.
 ///
 /// In the Indian tax system:
@@ -26,7 +45,12 @@ pub fn parse_financial_year(invoice_date: &str) -> Result<String, PostingError> 
         .parse()
         .map_err(|_| PostingError::InvalidDateFormat(invoice_date.to_string()))?;
 
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || !(1000..=9999).contains(&year) {
+    if !(1000..=9999).contains(&year) || !(1..=12).contains(&month) {
+        return Err(PostingError::InvalidDateFormat(invoice_date.to_string()));
+    }
+
+    let max_days = days_in_month(year, month);
+    if day < 1 || day > max_days {
         return Err(PostingError::InvalidDateFormat(invoice_date.to_string()));
     }
 

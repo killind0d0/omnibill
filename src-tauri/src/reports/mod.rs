@@ -509,26 +509,49 @@ fn add_invoice_to_category(
     cat: &mut Gstr1CategorySummary,
     inv: Gstr1InvoiceEntry,
 ) -> Result<(), ReportError> {
-    cat.taxable_paise = cat
-        .taxable_paise
-        .checked_add(inv.taxable_paise)
-        .ok_or(ReportError::MathOverflow)?;
-    cat.cgst_paise = cat
-        .cgst_paise
-        .checked_add(inv.cgst_paise)
-        .ok_or(ReportError::MathOverflow)?;
-    cat.sgst_paise = cat
-        .sgst_paise
-        .checked_add(inv.sgst_paise)
-        .ok_or(ReportError::MathOverflow)?;
-    cat.igst_paise = cat
-        .igst_paise
-        .checked_add(inv.igst_paise)
-        .ok_or(ReportError::MathOverflow)?;
-    cat.total_amount_paise = cat
-        .total_amount_paise
-        .checked_add(inv.total_amount_paise)
-        .ok_or(ReportError::MathOverflow)?;
+    if inv.transaction_type == "SALE_RETURN" {
+        cat.taxable_paise = cat
+            .taxable_paise
+            .checked_sub(inv.taxable_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.cgst_paise = cat
+            .cgst_paise
+            .checked_sub(inv.cgst_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.sgst_paise = cat
+            .sgst_paise
+            .checked_sub(inv.sgst_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.igst_paise = cat
+            .igst_paise
+            .checked_sub(inv.igst_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.total_amount_paise = cat
+            .total_amount_paise
+            .checked_sub(inv.total_amount_paise)
+            .ok_or(ReportError::MathOverflow)?;
+    } else {
+        cat.taxable_paise = cat
+            .taxable_paise
+            .checked_add(inv.taxable_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.cgst_paise = cat
+            .cgst_paise
+            .checked_add(inv.cgst_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.sgst_paise = cat
+            .sgst_paise
+            .checked_add(inv.sgst_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.igst_paise = cat
+            .igst_paise
+            .checked_add(inv.igst_paise)
+            .ok_or(ReportError::MathOverflow)?;
+        cat.total_amount_paise = cat
+            .total_amount_paise
+            .checked_add(inv.total_amount_paise)
+            .ok_or(ReportError::MathOverflow)?;
+    }
 
     cat.total_taxable_paise = cat.taxable_paise;
     cat.total_cgst_paise = cat.cgst_paise;
@@ -673,11 +696,11 @@ pub fn get_gstr1_summary(
     let mut hsn_stmt = conn.prepare(
         "SELECT
             r.hsn_sac AS hsn_code,
-            SUM(ti.quantity_milli) AS total_quantity_milli,
-            SUM(ti.taxable_paise) AS taxable_paise,
-            SUM(ti.cgst_paise) AS cgst_paise,
-            SUM(ti.sgst_paise) AS sgst_paise,
-            SUM(ti.igst_paise) AS igst_paise
+            SUM(CASE WHEN t.transaction_type = 'SALE_RETURN' THEN -ti.quantity_milli ELSE ti.quantity_milli END) AS total_quantity_milli,
+            SUM(CASE WHEN t.transaction_type = 'SALE_RETURN' THEN -ti.taxable_paise ELSE ti.taxable_paise END) AS taxable_paise,
+            SUM(CASE WHEN t.transaction_type = 'SALE_RETURN' THEN -ti.cgst_paise ELSE ti.cgst_paise END) AS cgst_paise,
+            SUM(CASE WHEN t.transaction_type = 'SALE_RETURN' THEN -ti.sgst_paise ELSE ti.sgst_paise END) AS sgst_paise,
+            SUM(CASE WHEN t.transaction_type = 'SALE_RETURN' THEN -ti.igst_paise ELSE ti.igst_paise END) AS igst_paise
          FROM transaction_items ti
          JOIN transactions t ON ti.transaction_id = t.id
          JOIN resources r ON ti.resource_id = r.id
@@ -800,13 +823,13 @@ pub fn get_stock_summary(conn: &Connection) -> Result<StockSummaryReport, Report
         "SELECT
             r.sku_or_code AS sku,
             r.name AS name,
-            rl.batch_number AS batch_number,
+            COALESCE(rl.batch_number, '') AS batch_number,
             rl.expiry_date AS expiry_date,
             COALESCE(SUM(sm.quantity_delta_milli), 0) AS current_quantity_milli,
             r.cost_price_paise,
             r.base_price_paise
          FROM resources r
-         JOIN resource_lots rl ON r.id = rl.resource_id
+         LEFT JOIN resource_lots rl ON r.id = rl.resource_id
          LEFT JOIN stock_movements sm ON rl.id = sm.lot_id
          GROUP BY r.id, r.sku_or_code, r.name, rl.id, rl.batch_number, rl.expiry_date, r.cost_price_paise, r.base_price_paise
          ORDER BY r.sku_or_code ASC, rl.batch_number ASC",

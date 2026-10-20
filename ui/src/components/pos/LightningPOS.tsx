@@ -152,10 +152,18 @@ export const LightningPOS: React.FC = () => {
     [showToast]
   );
 
-  // Barcode Scanner Keyboard-Wedge Listener
+  // Barcode Scanner Keyboard-Wedge Listener with 300ms debounce
   useBarcodeScanner({
-    enabled: activeMode === 'SALES' && !isPaymentOpen && !isReceiptOpen && !isHelpOpen && !isDateModalOpen && !isSearchOpen,
+    enabled:
+      activeMode === 'SALES' &&
+      !isPaymentOpen &&
+      !isReceiptOpen &&
+      !isHelpOpen &&
+      !isDateModalOpen &&
+      !isSearchOpen,
+    debounceMs: 300,
     onScan: (barcode) => {
+      setNumpadValue('');
       const found = products.find(
         (p) => p.barcode === barcode || p.sku.toLowerCase() === barcode.toLowerCase()
       );
@@ -338,7 +346,11 @@ export const LightningPOS: React.FC = () => {
   const handleCompletePayment = async (payment: PaymentDetails) => {
     if (cartItems.length === 0) return;
     const sale = buildCompletedSale(payment);
-    await apiPostSale(sale);
+    const res = await apiPostSale(sale);
+    if (!res.success) {
+      showToast(`Payment error: ${res.error || 'Failed to post transaction'}`);
+      return;
+    }
     setLastCompletedSale(sale);
     setIsPaymentOpen(false);
     setIsReceiptOpen(true);
@@ -349,11 +361,15 @@ export const LightningPOS: React.FC = () => {
   const handleSaveAndPrintSlip = useCallback(async () => {
     if (cartItems.length === 0) return;
     const sale = buildCompletedSale();
-    await apiPostSale(sale);
+    const res = await apiPostSale(sale);
+    if (!res.success) {
+      showToast(`Sale error: ${res.error || 'Failed to post transaction'}`);
+      return;
+    }
     setLastCompletedSale(sale);
     setIsReceiptOpen(true);
     refreshProducts();
-  }, [cartItems.length, buildCompletedSale, refreshProducts]);
+  }, [cartItems.length, buildCompletedSale, refreshProducts, showToast]);
 
   const handleFinishSale = () => {
     setCartItems([]);

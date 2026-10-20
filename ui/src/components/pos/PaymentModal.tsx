@@ -51,12 +51,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const tenderedPaise = parseRupeesToPaise(tenderedStr);
   const changeDuePaise = Math.max(0, tenderedPaise - totalAmountPaise);
+  const isUnderTendered = mode === 'CASH' && tenderedPaise < totalAmountPaise;
 
   const handleConfirm = () => {
+    if (isUnderTendered) {
+      return;
+    }
     const payment: PaymentDetails = {
       mode,
-      amount_tendered_paise: tenderedPaise > 0 ? tenderedPaise : totalAmountPaise,
-      change_due_paise: changeDuePaise,
+      amount_tendered_paise: mode === 'CASH' ? tenderedPaise : totalAmountPaise,
+      change_due_paise: mode === 'CASH' ? changeDuePaise : 0,
     };
     onCompletePayment(payment);
   };
@@ -208,6 +212,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 {formatPaise(changeDuePaise)}
               </span>
             </div>
+
+            {isUnderTendered && (
+              <div className="text-xs text-rose-400 font-semibold bg-rose-950/40 p-2 rounded-lg border border-rose-500/30 flex items-center justify-between">
+                <span>⚠️ Cash tendered is insufficient.</span>
+                <span className="font-mono">Due: {formatPaise(totalAmountPaise - tenderedPaise)}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -239,7 +250,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           <button
             type="button"
             onClick={handleConfirm}
-            className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center space-x-2 shadow-lg shadow-emerald-600/30 transition-all cursor-pointer"
+            disabled={isUnderTendered}
+            className={`px-6 py-2.5 rounded-xl text-xs font-bold flex items-center space-x-2 shadow-lg transition-all ${
+              isUnderTendered
+                ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer shadow-emerald-600/30'
+            }`}
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>Complete & Print (Enter)</span>

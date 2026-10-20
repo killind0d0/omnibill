@@ -518,7 +518,7 @@ pub fn generate_qr_code_commands(data: &str, module_size: u8) -> Vec<u8> {
 /// Formats paise integer into currency string (e.g. 11800 -> "118.00").
 pub fn format_paise(paise: i64) -> String {
     let sign = if paise < 0 { "-" } else { "" };
-    let abs = paise.abs();
+    let abs: u64 = paise.unsigned_abs();
     let rupees = abs / 100;
     let cents = abs % 100;
     format!("{}{}.{:02}", sign, rupees, cents)
@@ -527,14 +527,14 @@ pub fn format_paise(paise: i64) -> String {
 /// Formats quantity milli integer into string (e.g. 1000 -> "1", 2500 -> "2.5").
 pub fn format_quantity_milli(milli: i64) -> String {
     let sign = if milli < 0 { "-" } else { "" };
-    let abs = milli.abs();
+    let abs: u64 = milli.unsigned_abs();
     let whole = abs / 1000;
     let frac = abs % 1000;
     if frac == 0 {
         format!("{}{}", sign, whole)
-    } else if frac % 100 == 0 {
+    } else if frac.is_multiple_of(100) {
         format!("{}{}.{}", sign, whole, frac / 100)
-    } else if frac % 10 == 0 {
+    } else if frac.is_multiple_of(10) {
         format!("{}{}.{:02}", sign, whole, frac / 10)
     } else {
         format!("{}{}.{:03}", sign, whole, frac)
@@ -1036,7 +1036,7 @@ mod tests {
 
         // 9. QR code command sequence verification (GS ( k)
         assert!(
-            bytes.windows(3).any(|w| w == &[0x1d, 0x28, 0x6b]),
+            bytes.windows(3).any(|w| w == [0x1d, 0x28, 0x6b]),
             "Must contain native QR code command GS ( k"
         );
     }

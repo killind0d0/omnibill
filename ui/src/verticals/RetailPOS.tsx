@@ -29,7 +29,7 @@ import {
   PostedTransactionReceipt,
 } from './types';
 import { VerticalIPCBridge } from './ipc';
-import { computeSaleTotals, formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
 import { buildUpiString, generateQrDataUrl } from '../lib/upi';
 import { useBarcodeScanner } from '../lib/scanner';
 
@@ -105,12 +105,8 @@ export const RetailPOS: React.FC = () => {
         return copy;
       }
 
-      // Compute initial line discount from MRP if present
-      const discountPaise =
-        item.mrp_paise && item.mrp_paise > item.base_price_paise
-          ? item.mrp_paise - item.base_price_paise
-          : 0;
-
+      // Maintain base_price_paise as unit_price_paise with discount_paise = 0
+      // This ensures taxable_paise is exactly item.base_price_paise and prevents double-deduction.
       const newLine: VerticalCartLine = {
         id: `line_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         resource_id: item.id,
@@ -123,9 +119,9 @@ export const RetailPOS: React.FC = () => {
         quantity_milli: 1000,
         unit_price_paise: item.base_price_paise,
         mrp_paise: item.mrp_paise,
-        discount_paise: discountPaise,
+        discount_paise: 0,
         gross_paise: item.base_price_paise,
-        taxable_paise: item.base_price_paise - discountPaise,
+        taxable_paise: item.base_price_paise,
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
@@ -182,10 +178,13 @@ export const RetailPOS: React.FC = () => {
   const totalSavingsPaise = useMemo(() => {
     return cart.reduce((acc, line) => {
       if (line.mrp_paise && line.mrp_paise > line.unit_price_paise) {
-        const itemDiscount = (line.mrp_paise - line.unit_price_paise) * (line.quantity_milli / 1000);
+        const itemDiscount = computeLineSubtotalPaise(
+          line.mrp_paise - line.unit_price_paise,
+          line.quantity_milli
+        );
         return acc + itemDiscount;
       }
-      return acc + (line.discount_paise * (line.quantity_milli / 1000));
+      return acc + computeLineSubtotalPaise(line.discount_paise, line.quantity_milli);
     }, 0);
   }, [cart]);
 
@@ -225,12 +224,12 @@ export const RetailPOS: React.FC = () => {
   const handlePostTransaction = async () => {
     if (cart.length === 0) return;
 
-    if (paymentMode === 'CASH' && cashTenderedPaise < totalPayablePaise && cashTenderedPaise > 0) {
-      alert(`Tender amount is insufficient. Balance remaining: ${formatPaise(remainingDuePaise)}`);
+    if (paymentMode === 'CASH' && cashTenderedPaise < totalPayablePaise) {
+      alert(`Tender amount is insufficient. Amount due: ${formatPaise(totalPayablePaise)}, Tendered: ${formatPaise(cashTenderedPaise)}`);
       return;
     }
 
-    const tenderAmount = paymentMode === 'CASH' && cashTenderedPaise > 0 ? cashTenderedPaise : totalPayablePaise;
+    const tenderAmount = paymentMode === 'CASH' ? cashTenderedPaise : totalPayablePaise;
 
     const payment: PaymentDetails = {
       mode: paymentMode,
@@ -517,7 +516,7 @@ export const RetailPOS: React.FC = () => {
                   {/* Line Total & Remove */}
                   <div className="text-right pl-3 min-w-[70px]">
                     <div className="font-bold text-slate-100 font-mono">
-                      {formatPaise(line.unit_price_paise * qtyUnits)}
+                      {formatPaise(computeLineSubtotalPaise(line.unit_price_paise, line.quantity_milli))}
                     </div>
                     <button
                       onClick={() => removeLine(line.id)}
@@ -815,7 +814,7 @@ export const RetailPOS: React.FC = () => {
                       <td className="text-center">{l.quantity_milli / 1000}</td>
                       <td className="text-right">{formatPaise(l.unit_price_paise, false)}</td>
                       <td className="text-right font-bold">
-                        {formatPaise((l.unit_price_paise * l.quantity_milli) / 1000, false)}
+                        {formatPaise(computeLineSubtotalPaise(l.unit_price_paise, l.quantity_milli), false)}
                       </td>
                     </tr>
                   ))}

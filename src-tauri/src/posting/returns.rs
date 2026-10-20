@@ -68,6 +68,51 @@ fn generate_id(tx: &Transaction<'_>, prefix: &str) -> Result<String, PostingErro
     Ok(format!("{}_{}", prefix, hex_val))
 }
 
+/// Derives the original transaction's `PriceMode` by examining the mathematical relationship
+/// between line totals, gross amounts, and tax breakdowns in `transaction_items`.
+pub(crate) fn detect_original_price_mode(
+    tx: &Transaction<'_>,
+    original_tx_id: &str,
+) -> Result<PriceMode, PostingError> {
+    let mut stmt = tx.prepare(
+        "SELECT quantity_milli, unit_price_paise, discount_paise, taxable_paise, tax_rate_bps, line_total_paise
+         FROM transaction_items
+         WHERE transaction_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![original_tx_id], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (qty, unit_price, discount, taxable, rate_bps, line_total) = row?;
+        if rate_bps > 0 {
+            // gross = (qty * unit_price) / 1000
+            let gross = (qty as i128)
+                .checked_mul(unit_price as i128)
+                .ok_or(PostingError::MathOverflow)?
+                / 1000;
+            let line_base = (gross as i64)
+                .checked_sub(discount)
+                .ok_or(PostingError::MathOverflow)?;
+
+            if line_total == line_base && taxable < line_base {
+                return Ok(PriceMode::Inclusive);
+            } else if taxable == line_base && line_total > line_base {
+                return Ok(PriceMode::Exclusive);
+            }
+        }
+    }
+    // If all lines had 0% tax, Exclusive and Inclusive produce identical calculations.
+    Ok(PriceMode::Exclusive)
+}
+
 pub fn post_sale_return(
     conn: &mut Connection,
     input: &SaleReturnInput,
@@ -123,15 +168,69 @@ pub fn post_sale_return(
     }
 
     // 3. Line & tax computation
+    let orig_price_mode = detect_original_price_mode(&tx, &input.original_transaction_id)?;
     let sale_input = SaleInput {
         invoice_date: input.return_date.clone(),
         seller_state_code: seller_state_code.clone(),
         place_of_supply_state_code: place_of_supply_state_code.clone(),
         customer: Some(entity_id.clone()),
-        price_mode: PriceMode::Exclusive,
+        price_mode: orig_price_mode,
         lines: input.lines.clone(),
     };
     let computation = compute_sale(&sale_input)?;
+
+    // 3b. Validate items & enforce return quantity ceiling
+    let mut requested_per_resource: HashMap<String, i64> = HashMap::new();
+    for line in &input.lines {
+        if line.quantity_milli <= 0 {
+            return Err(PostingError::InvalidQuantity(line.quantity_milli));
+        }
+        let entry = requested_per_resource.entry(line.resource_id.clone()).or_insert(0);
+        *entry = entry.checked_add(line.quantity_milli).ok_or(PostingError::MathOverflow)?;
+    }
+
+    for (resource_id, requested_milli) in &requested_per_resource {
+        // Query original quantity sold for this resource
+        let sold_quantity: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(quantity_milli), 0)
+             FROM transaction_items
+             WHERE transaction_id = ?1 AND resource_id = ?2",
+            params![&input.original_transaction_id, resource_id],
+            |r| r.get(0),
+        )?;
+
+        if sold_quantity == 0 {
+            return Err(PostingError::InvalidOriginalTransaction(format!(
+                "Resource '{}' was not part of original transaction '{}'",
+                resource_id, input.original_transaction_id
+            )));
+        }
+
+        // Query previously returned quantity for this resource across all POSTED SALE_RETURNs
+        let prior_returned_quantity: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(ti.quantity_milli), 0)
+             FROM transaction_items ti
+             JOIN transactions t ON t.id = ti.transaction_id
+             WHERE t.original_transaction_id = ?1
+               AND t.status = 'POSTED'
+               AND t.transaction_type = 'SALE_RETURN'
+               AND ti.resource_id = ?2",
+            params![&input.original_transaction_id, resource_id],
+            |r| r.get(0),
+        )?;
+
+        let available_milli = sold_quantity
+            .checked_sub(prior_returned_quantity)
+            .ok_or(PostingError::MathOverflow)?;
+
+        if *requested_milli > available_milli {
+            return Err(PostingError::ReturnQuantityExceedsOriginal {
+                resource_id: resource_id.clone(),
+                requested_milli: *requested_milli,
+                available_milli,
+            });
+        }
+    }
 
     // 4. Allocate gapless credit note invoice number ("CN")
     let (series, invoice_number) = allocate_invoice_number(&tx, "CN", &input.return_date)?;
@@ -333,17 +432,7 @@ pub fn post_sale_return(
     }
 
     // 7. Stock restoration for stock-tracked resources
-    let mut resource_quantities: HashMap<String, i64> = HashMap::new();
-    for line in &input.lines {
-        let entry = resource_quantities
-            .entry(line.resource_id.clone())
-            .or_insert(0);
-        *entry = entry
-            .checked_add(line.quantity_milli)
-            .ok_or(PostingError::MathOverflow)?;
-    }
-
-    for (resource_id, needed_milli) in resource_quantities {
+    for (resource_id, needed_milli) in requested_per_resource {
         let is_tracked: i64 = match tx.query_row(
             "SELECT is_stock_tracked FROM resources WHERE id = ?1",
             params![&resource_id],
@@ -360,11 +449,14 @@ pub fn post_sale_return(
             continue;
         }
 
-        // Find lots affected in the original sale
+        // Find lots affected in the original sale and their deducted quantities
         let mut orig_lots_stmt = tx.prepare(
             "SELECT lot_id, ABS(quantity_delta_milli)
              FROM stock_movements
-             WHERE transaction_id = ?1 AND resource_id = ?2 AND lot_id IS NOT NULL
+             WHERE transaction_id = ?1
+               AND resource_id = ?2
+               AND lot_id IS NOT NULL
+               AND quantity_delta_milli < 0
              ORDER BY created_at DESC, id DESC",
         )?;
 
@@ -376,11 +468,34 @@ pub fn post_sale_return(
 
         let mut remaining = needed_milli;
 
-        for (lot_id, orig_qty) in orig_lots {
+        for (lot_id, orig_deducted) in orig_lots {
             if remaining == 0 {
                 break;
             }
-            let restore = std::cmp::min(remaining, orig_qty);
+
+            // Query how much has already been restored to this specific lot from prior returns
+            let prior_restored_to_lot: i64 = tx.query_row(
+                "SELECT COALESCE(SUM(sm.quantity_delta_milli), 0)
+                 FROM stock_movements sm
+                 JOIN transactions t ON t.id = sm.transaction_id
+                 WHERE t.original_transaction_id = ?1
+                   AND t.status = 'POSTED'
+                   AND t.transaction_type = 'SALE_RETURN'
+                   AND sm.lot_id = ?2
+                   AND sm.reason = 'SALE_RETURN'",
+                params![&input.original_transaction_id, &lot_id],
+                |r| r.get(0),
+            )?;
+
+            let lot_restorable = orig_deducted
+                .checked_sub(prior_restored_to_lot)
+                .ok_or(PostingError::MathOverflow)?;
+
+            if lot_restorable <= 0 {
+                continue;
+            }
+
+            let restore = std::cmp::min(remaining, lot_restorable);
             let sm_id = generate_id(&tx, "sm")?;
 
             tx.execute(
@@ -395,23 +510,12 @@ pub fn post_sale_return(
                 .ok_or(PostingError::MathOverflow)?;
         }
 
+        // If any quantity cannot be restored to original lots, reject! Never fallback to arbitrary lots.
         if remaining > 0 {
-            // Fallback: restore remaining quantity to the primary/first lot of this resource
-            let fallback_lot_id: String = tx
-                .query_row(
-                    "SELECT id FROM resource_lots WHERE resource_id = ?1 ORDER BY created_at ASC, id ASC LIMIT 1",
-                    params![&resource_id],
-                    |r| r.get(0),
-                )
-                .map_err(|_| PostingError::ResourceNotFound(format!("No lot found for resource {}", resource_id)))?;
-
-            let sm_id = generate_id(&tx, "sm")?;
-            tx.execute(
-                "INSERT INTO stock_movements (
-                    id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli
-                ) VALUES (?1, ?2, ?3, ?4, 'SALE_RETURN', ?5)",
-                params![&sm_id, &resource_id, &fallback_lot_id, &tx_id, remaining],
-            )?;
+            return Err(PostingError::InvalidOriginalTransaction(format!(
+                "Cannot restore {} milli for resource '{}': insufficient lot allocations in original transaction",
+                remaining, resource_id
+            )));
         }
     }
 
@@ -488,15 +592,69 @@ pub fn post_purchase_return(
     }
 
     // 3. Line & tax computation
+    let orig_price_mode = detect_original_price_mode(&tx, &input.original_transaction_id)?;
     let sale_input = SaleInput {
         invoice_date: input.return_date.clone(),
         seller_state_code: seller_state_code.clone(),
         place_of_supply_state_code: place_of_supply_state_code.clone(),
         customer: Some(entity_id.clone()),
-        price_mode: PriceMode::Exclusive,
+        price_mode: orig_price_mode,
         lines: input.lines.clone(),
     };
     let computation = compute_sale(&sale_input)?;
+
+    // 3b. Validate items & enforce return quantity ceiling
+    let mut requested_per_resource: HashMap<String, i64> = HashMap::new();
+    for line in &input.lines {
+        if line.quantity_milli <= 0 {
+            return Err(PostingError::InvalidQuantity(line.quantity_milli));
+        }
+        let entry = requested_per_resource.entry(line.resource_id.clone()).or_insert(0);
+        *entry = entry.checked_add(line.quantity_milli).ok_or(PostingError::MathOverflow)?;
+    }
+
+    for (resource_id, requested_milli) in &requested_per_resource {
+        // Query original quantity purchased for this resource
+        let purchased_quantity: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(quantity_milli), 0)
+             FROM transaction_items
+             WHERE transaction_id = ?1 AND resource_id = ?2",
+            params![&input.original_transaction_id, resource_id],
+            |r| r.get(0),
+        )?;
+
+        if purchased_quantity == 0 {
+            return Err(PostingError::InvalidOriginalTransaction(format!(
+                "Resource '{}' was not part of original transaction '{}'",
+                resource_id, input.original_transaction_id
+            )));
+        }
+
+        // Query previously returned quantity for this resource across all POSTED PURCHASE_RETURNs
+        let prior_returned_quantity: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(ti.quantity_milli), 0)
+             FROM transaction_items ti
+             JOIN transactions t ON t.id = ti.transaction_id
+             WHERE t.original_transaction_id = ?1
+               AND t.status = 'POSTED'
+               AND t.transaction_type = 'PURCHASE_RETURN'
+               AND ti.resource_id = ?2",
+            params![&input.original_transaction_id, resource_id],
+            |r| r.get(0),
+        )?;
+
+        let available_milli = purchased_quantity
+            .checked_sub(prior_returned_quantity)
+            .ok_or(PostingError::MathOverflow)?;
+
+        if *requested_milli > available_milli {
+            return Err(PostingError::ReturnQuantityExceedsOriginal {
+                resource_id: resource_id.clone(),
+                requested_milli: *requested_milli,
+                available_milli,
+            });
+        }
+    }
 
     // 4. Allocate gapless debit note invoice number ("DN")
     let (series, invoice_number) = allocate_invoice_number(&tx, "DN", &input.return_date)?;
@@ -698,17 +856,7 @@ pub fn post_purchase_return(
     }
 
     // 7. Stock deduction for stock-tracked resources (FIFO across lots)
-    let mut resource_quantities: HashMap<String, i64> = HashMap::new();
-    for line in &input.lines {
-        let entry = resource_quantities
-            .entry(line.resource_id.clone())
-            .or_insert(0);
-        *entry = entry
-            .checked_add(line.quantity_milli)
-            .ok_or(PostingError::MathOverflow)?;
-    }
-
-    for (resource_id, needed_milli) in resource_quantities {
+    for (resource_id, needed_milli) in requested_per_resource {
         let is_tracked: i64 = match tx.query_row(
             "SELECT is_stock_tracked FROM resources WHERE id = ?1",
             params![&resource_id],

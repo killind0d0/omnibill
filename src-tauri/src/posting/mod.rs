@@ -98,6 +98,16 @@ pub enum PostingError {
         payment_paise: i64,
     },
     InvalidOriginalTransaction(String),
+    ReturnQuantityExceedsOriginal {
+        resource_id: String,
+        requested_milli: i64,
+        available_milli: i64,
+    },
+    AllocationExceedsInvoiceBalance {
+        transaction_id: String,
+        allocated_paise: i64,
+        unpaid_balance_paise: i64,
+    },
 }
 
 impl std::fmt::Display for PostingError {
@@ -172,6 +182,24 @@ impl std::fmt::Display for PostingError {
             PostingError::InvalidOriginalTransaction(msg) => {
                 write!(f, "Invalid original transaction: {}", msg)
             }
+            PostingError::ReturnQuantityExceedsOriginal {
+                resource_id,
+                requested_milli,
+                available_milli,
+            } => write!(
+                f,
+                "Return quantity for resource '{}' ({} milli) exceeds available original quantity ({} milli)",
+                resource_id, requested_milli, available_milli
+            ),
+            PostingError::AllocationExceedsInvoiceBalance {
+                transaction_id,
+                allocated_paise,
+                unpaid_balance_paise,
+            } => write!(
+                f,
+                "Payment allocation ({} paise) exceeds unpaid invoice balance ({} paise) for transaction '{}'",
+                allocated_paise, unpaid_balance_paise, transaction_id
+            ),
         }
     }
 }

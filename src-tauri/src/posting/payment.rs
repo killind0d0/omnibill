@@ -2,6 +2,7 @@ use super::PostingError;
 use super::series::allocate_invoice_number;
 use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -133,18 +134,22 @@ pub fn post_payment(
         Err(e) => return Err(PostingError::Database(e)),
     };
 
-    // 4. Validate allocations (transaction must exist and belong to entity)
+    // 4. Validate allocations (transaction must exist, belong to entity, and not be overpaid)
+    let mut requested_alloc_per_tx: HashMap<String, i64> = HashMap::new();
     for alloc in &input.allocations {
-        let (tx_entity_id, status): (String, String) = match tx.query_row(
-            "SELECT entity_id, status FROM transactions WHERE id = ?1",
-            params![&alloc.transaction_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+        let entry = requested_alloc_per_tx.entry(alloc.transaction_id.clone()).or_insert(0);
+        *entry = entry.checked_add(alloc.amount_paise).ok_or(PostingError::MathOverflow)?;
+    }
+
+    for (tx_id, requested_alloc) in requested_alloc_per_tx {
+        let (tx_entity_id, status, total_amount_paise): (String, String, i64) = match tx.query_row(
+            "SELECT entity_id, status, total_amount_paise FROM transactions WHERE id = ?1",
+            params![&tx_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         ) {
             Ok(res) => res,
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                return Err(PostingError::TransactionNotFound(
-                    alloc.transaction_id.clone(),
-                ));
+                return Err(PostingError::TransactionNotFound(tx_id));
             }
             Err(e) => return Err(PostingError::Database(e)),
         };
@@ -152,15 +157,36 @@ pub fn post_payment(
         if status != "POSTED" {
             return Err(PostingError::InvalidOriginalTransaction(format!(
                 "Transaction {} has status {}, expected POSTED",
-                alloc.transaction_id, status
+                tx_id, status
             )));
         }
 
         if tx_entity_id != input.entity_id {
             return Err(PostingError::InvalidOriginalTransaction(format!(
                 "Transaction {} entity '{}' does not match payment entity '{}'",
-                alloc.transaction_id, tx_entity_id, input.entity_id
+                tx_id, tx_entity_id, input.entity_id
             )));
+        }
+
+        // Query sum of all prior allocations on this transaction
+        let prior_allocated_paise: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(amount_allocated_paise), 0)
+             FROM payment_allocations
+             WHERE transaction_id = ?1",
+            params![&tx_id],
+            |r| r.get(0),
+        )?;
+
+        let unpaid_balance_paise = total_amount_paise
+            .checked_sub(prior_allocated_paise)
+            .ok_or(PostingError::MathOverflow)?;
+
+        if requested_alloc > unpaid_balance_paise {
+            return Err(PostingError::AllocationExceedsInvoiceBalance {
+                transaction_id: tx_id,
+                allocated_paise: requested_alloc,
+                unpaid_balance_paise,
+            });
         }
     }
 

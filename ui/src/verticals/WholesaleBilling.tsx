@@ -33,7 +33,7 @@ import {
   PostedTransactionReceipt,
 } from './types';
 import { VerticalIPCBridge } from './ipc';
-import { computeSaleTotals, formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
 
 export const WholesaleBilling: React.FC = () => {
   // State
@@ -268,8 +268,9 @@ export const WholesaleBilling: React.FC = () => {
     setLastReceipt(receipt);
     setShowA4InvoiceModal(true);
 
-    // Update state customer balance locally
-    selectedCustomer.current_balance_paise += totalInvoiceAmountPaise;
+    // Refresh customer entities from IPC bridge (NO direct selectedCustomer mutation)
+    const updatedCustomers = await VerticalIPCBridge.getEntities('CUSTOMER');
+    setCustomers(updatedCustomers as WholesaleCustomer[]);
   };
 
   return (
@@ -531,7 +532,7 @@ export const WholesaleBilling: React.FC = () => {
 
                       {/* Taxable */}
                       <td className="py-2.5 px-3 text-right font-mono text-slate-300">
-                        {formatPaise((line.unit_price_paise * line.quantity_milli) / 1000)}
+                        {formatPaise(computeLineSubtotalPaise(line.unit_price_paise, line.quantity_milli))}
                       </td>
 
                       {/* GST Tax Rate */}
@@ -935,10 +936,10 @@ export const WholesaleBilling: React.FC = () => {
                         {formatPaise(l.unit_price_paise, false)}
                       </td>
                       <td className="p-1.5 border-r border-gray-300 text-right font-mono">
-                        {formatPaise((l.unit_price_paise * l.quantity_milli) / 1000, false)}
+                        {formatPaise(computeLineSubtotalPaise(l.unit_price_paise, l.quantity_milli), false)}
                       </td>
                       <td className="p-1.5 text-right font-bold font-mono">
-                        {formatPaise((l.unit_price_paise * l.quantity_milli) / 1000, false)}
+                        {formatPaise(computeLineSubtotalPaise(l.unit_price_paise, l.quantity_milli), false)}
                       </td>
                     </tr>
                   ))}

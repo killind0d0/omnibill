@@ -193,25 +193,63 @@ pub fn cmd_create_resource(
     db_path: String,
     input: CreateResourceInput,
 ) -> Result<ResourceRecord, String> {
-    let conn = open_connection(&db_path).map_err(|e| e.to_string())?;
+    let trimmed_sku = input.sku_or_code.trim();
+    if trimmed_sku.is_empty() {
+        return Err("Resource SKU or code cannot be empty".to_string());
+    }
+    let trimmed_name = input.name.trim();
+    if trimmed_name.is_empty() {
+        return Err("Resource name cannot be empty".to_string());
+    }
+    if input.tax_rate_bps < 0 || input.tax_rate_bps > 10000 {
+        return Err(format!(
+            "Invalid tax rate: {} bps (must be 0..=10000)",
+            input.tax_rate_bps
+        ));
+    }
+    if input.base_price_paise < 0 {
+        return Err(format!(
+            "Invalid base price: {} paise (must be >= 0)",
+            input.base_price_paise
+        ));
+    }
+    if let Some(cost) = input.cost_price_paise
+        && cost < 0
+    {
+        return Err(format!("Invalid cost price: {} paise (must be >= 0)", cost));
+    }
+    if let Some(qty) = input.initial_stock_milli
+        && qty < 0
+    {
+        return Err(format!(
+            "Invalid initial stock: {} milli (must be >= 0)",
+            qty
+        ));
+    }
 
-    let hex_val: String = conn
+    let mut conn = open_connection(&db_path).map_err(|e| e.to_string())?;
+
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+
+    let hex_val: String = tx
         .query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
     let res_id = input.id.unwrap_or_else(|| format!("res_{}", hex_val));
     let cost_price = input.cost_price_paise.unwrap_or(0);
     let is_tracked = if input.is_stock_tracked.unwrap_or(true) { 1 } else { 0 };
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO resources (
             id, sku_or_code, name, hsn_sac, tax_rate_bps,
             base_price_paise, cost_price_paise, is_stock_tracked, is_active
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
         params![
             &res_id,
-            &input.sku_or_code,
-            &input.name,
-            &input.hsn_sac,
+            trimmed_sku,
+            trimmed_name,
+            input.hsn_sac.trim(),
             input.tax_rate_bps,
             input.base_price_paise,
             cost_price,
@@ -220,30 +258,30 @@ pub fn cmd_create_resource(
     )
     .map_err(|e| e.to_string())?;
 
-    // Seed initial stock lot if specified and resource is stock-tracked
     let mut current_stock = 0;
     if let Some(init_qty) = input.initial_stock_milli
-        && init_qty > 0 && is_tracked == 1 {
-            let lot_id = format!("lot_{}", hex_val);
-            conn.execute(
-                "INSERT INTO resource_lots (id, resource_id, batch_number, mrp_paise)
-                 VALUES (?1, ?2, 'BATCH-INIT', ?3)",
-                params![&lot_id, &res_id, input.base_price_paise],
-            )
-            .map_err(|e| e.to_string())?;
+        && init_qty > 0 && is_tracked == 1
+    {
+        let lot_id = format!("lot_{}", hex_val);
+        tx.execute(
+            "INSERT INTO resource_lots (id, resource_id, batch_number, mrp_paise)
+             VALUES (?1, ?2, 'BATCH-INIT', ?3)",
+            params![&lot_id, &res_id, input.base_price_paise],
+        )
+        .map_err(|e| e.to_string())?;
 
-            let sm_id = format!("sm_{}", hex_val);
-            conn.execute(
-                "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
-                 VALUES (?1, ?2, ?3, NULL, 'ADJUSTMENT', ?4)",
-                params![&sm_id, &res_id, &lot_id, init_qty],
-            )
-            .map_err(|e| e.to_string())?;
+        let sm_id = format!("sm_{}", hex_val);
+        tx.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES (?1, ?2, ?3, NULL, 'ADJUSTMENT', ?4)",
+            params![&sm_id, &res_id, &lot_id, init_qty],
+        )
+        .map_err(|e| e.to_string())?;
 
-            current_stock = init_qty;
+        current_stock = init_qty;
     }
 
-    let created_at: String = conn
+    let created_at: String = tx
         .query_row(
             "SELECT created_at FROM resources WHERE id = ?1",
             params![&res_id],
@@ -251,11 +289,13 @@ pub fn cmd_create_resource(
         )
         .map_err(|e| e.to_string())?;
 
+    tx.commit().map_err(|e| e.to_string())?;
+
     Ok(ResourceRecord {
         id: res_id,
-        sku_or_code: input.sku_or_code,
-        name: input.name,
-        hsn_sac: input.hsn_sac,
+        sku_or_code: trimmed_sku.to_string(),
+        name: trimmed_name.to_string(),
+        hsn_sac: input.hsn_sac.trim().to_string(),
         tax_rate_bps: input.tax_rate_bps,
         base_price_paise: input.base_price_paise,
         cost_price_paise: cost_price,

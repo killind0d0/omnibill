@@ -171,57 +171,95 @@ export const ReportsDashboard: React.FC = () => {
   // -------------------------------------------------------------
   // TAB 3: GSTR-1 EXPORT ACTIONS
   // -------------------------------------------------------------
+  const formatGstnDate = (isoDate: string): string => {
+    if (!isoDate) return '';
+    const parts = isoDate.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`; // YYYY-MM-DD -> DD-MM-YYYY
+    }
+    return isoDate;
+  };
+
   const exportGstr1Json = () => {
-    const payload = {
-      gstin: '27AABCO1234F1Z5',
-      fp: selectedPeriod.replace('-', ''), // e.g. 102026
-      b2b: b2bInvoices.map((inv) => ({
-        ctin: inv.gstin,
-        cname: inv.recipient_name,
+    // 1. Format Period as MMYYYY
+    const [year, month] = selectedPeriod.split('-');
+    const fp = `${month}${year}`; // e.g. "102026"
+
+    // 2. Group B2B invoices by recipient GSTIN (ctin)
+    const b2bMap = new Map<string, { ctin: string; cname: string; inv: any[] }>();
+
+    b2bInvoices.forEach((inv) => {
+      const ctin = inv.gstin;
+      if (!b2bMap.has(ctin)) {
+        b2bMap.set(ctin, {
+          ctin,
+          cname: inv.recipient_name,
+          inv: [],
+        });
+      }
+
+      const group = b2bMap.get(ctin)!;
+      group.inv.push({
         inum: inv.invoice_number,
-        idt: inv.invoice_date,
-        val: (inv.invoice_value_paise / 100).toFixed(2),
+        idt: formatGstnDate(inv.invoice_date),
+        val: Number((inv.invoice_value_paise / 100).toFixed(2)),
         pos: inv.pos_state_code,
         rchrg: inv.reverse_charge,
+        inv_typ: 'R',
         itms: [
           {
             num: 1,
             itm_det: {
               rt: inv.tax_rate_bps / 100,
-              txval: (inv.taxable_value_paise / 100).toFixed(2),
-              iamt: (inv.igst_paise / 100).toFixed(2),
-              camt: (inv.cgst_paise / 100).toFixed(2),
-              samt: (inv.sgst_paise / 100).toFixed(2),
-              csamt: '0.00',
+              txval: Number((inv.taxable_value_paise / 100).toFixed(2)),
+              iamt: Number((inv.igst_paise / 100).toFixed(2)),
+              camt: Number((inv.cgst_paise / 100).toFixed(2)),
+              samt: Number((inv.sgst_paise / 100).toFixed(2)),
+              csamt: 0,
             },
           },
         ],
+      });
+    });
+
+    const b2b = Array.from(b2bMap.values());
+
+    // 3. Format B2CS entries with numeric values
+    const b2cs = b2cEntries.map((b2c) => ({
+      sply_ty: b2c.pos_state_code === '27' ? 'INTRA' : 'INTER',
+      pos: b2c.pos_state_code,
+      typ: b2c.type,
+      rt: b2c.tax_rate_bps / 100,
+      txval: Number((b2c.taxable_value_paise / 100).toFixed(2)),
+      iamt: Number((b2c.igst_paise / 100).toFixed(2)),
+      camt: Number((b2c.cgst_paise / 100).toFixed(2)),
+      samt: Number((b2c.sgst_paise / 100).toFixed(2)),
+      csamt: 0,
+    }));
+
+    // 4. Format HSN summaries with numeric values
+    const hsn = {
+      data: hsnSummaries.map((h, idx) => ({
+        num: idx + 1,
+        hsn_sc: h.hsn_sac,
+        desc: h.description,
+        uqc: h.uqc,
+        qty: Number((h.total_quantity_milli / 1000).toFixed(3)),
+        val: Number((h.total_value_paise / 100).toFixed(2)),
+        txval: Number((h.taxable_value_paise / 100).toFixed(2)),
+        iamt: Number((h.igst_paise / 100).toFixed(2)),
+        camt: Number((h.cgst_paise / 100).toFixed(2)),
+        samt: Number((h.sgst_paise / 100).toFixed(2)),
+        csamt: 0,
       })),
-      b2cs: b2cEntries.map((b2c) => ({
-        sply_ty: b2c.pos_state_code === '27' ? 'INTRA' : 'INTER',
-        pos: b2c.pos_state_code,
-        typ: b2c.type,
-        rt: b2c.tax_rate_bps / 100,
-        txval: (b2c.taxable_value_paise / 100).toFixed(2),
-        iamt: (b2c.igst_paise / 100).toFixed(2),
-        camt: (b2c.cgst_paise / 100).toFixed(2),
-        samt: (b2c.sgst_paise / 100).toFixed(2),
-        csamt: '0.00',
-      })),
-      hsn: {
-        data: hsnSummaries.map((hsn) => ({
-          hsn_sc: hsn.hsn_sac,
-          desc: hsn.description,
-          uqc: hsn.uqc,
-          qty: (hsn.total_quantity_milli / 1000).toFixed(3),
-          val: (hsn.total_value_paise / 100).toFixed(2),
-          txval: (hsn.taxable_value_paise / 100).toFixed(2),
-          iamt: (hsn.igst_paise / 100).toFixed(2),
-          camt: (hsn.cgst_paise / 100).toFixed(2),
-          samt: (hsn.sgst_paise / 100).toFixed(2),
-          csamt: '0.00',
-        })),
-      },
+    };
+
+    const payload = {
+      gstin: '27AABCO1234F1Z5',
+      fp,
+      b2b,
+      b2cs,
+      hsn,
     };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });

@@ -56,10 +56,20 @@ export function computeLine(
   priceMode: PriceMode,
   isIntraState: boolean
 ): ComputedLineResult {
-  const quantityMilli = Math.max(0, Math.floor(line.quantity_milli));
-  const unitPricePaise = Math.max(0, Math.floor(line.unit_price_paise));
-  const discountPaise = Math.max(0, Math.floor(line.discount_paise));
-  const taxRateBps = Math.max(0, Math.min(10000, Math.floor(line.tax_rate_bps)));
+  if (line.quantity_milli <= 0) {
+    throw new Error(`Invalid quantity: ${line.quantity_milli} (must be > 0)`);
+  }
+  if (line.unit_price_paise < 0) {
+    throw new Error(`Invalid unit price: ${line.unit_price_paise} (must be >= 0)`);
+  }
+  if (line.tax_rate_bps < 0 || line.tax_rate_bps > 10000) {
+    throw new Error(`Invalid tax rate: ${line.tax_rate_bps} bps (must be 0..=10000)`);
+  }
+
+  const quantityMilli = Math.floor(line.quantity_milli);
+  const unitPricePaise = Math.floor(line.unit_price_paise);
+  const discountPaise = Math.floor(line.discount_paise);
+  const taxRateBps = Math.floor(line.tax_rate_bps);
 
   // gross = round(quantity_milli * unit_price_paise / 1000)
   const qBig = BigInt(quantityMilli);
@@ -68,8 +78,11 @@ export function computeLine(
   const grossBig = roundDivBigInt(mult, 1000n);
   const grossPaise = Number(grossBig);
 
-  // discount cannot exceed gross
-  const effectiveDiscount = Math.min(discountPaise, grossPaise);
+  if (discountPaise < 0 || discountPaise > grossPaise) {
+    throw new Error(`Invalid discount: ${discountPaise} exceeds gross ${grossPaise}`);
+  }
+
+  const effectiveDiscount = discountPaise;
   const rateBig = BigInt(taxRateBps);
 
   let taxablePaise: number;
@@ -153,12 +166,12 @@ export function computeSaleTotals(
 ): TaxComputation {
   const isIntraState = !sellerStateCode || !placeOfSupplyStateCode || sellerStateCode === placeOfSupplyStateCode;
 
-  let sumSubtotal = 0;
-  let sumDiscount = 0;
-  let sumTaxable = 0;
-  let sumCgst = 0;
-  let sumSgst = 0;
-  let sumIgst = 0;
+  let sumSubtotal = 0n;
+  let sumDiscount = 0n;
+  let sumTaxable = 0n;
+  let sumCgst = 0n;
+  let sumSgst = 0n;
+  let sumIgst = 0n;
 
   const computedLines: CartLineItem[] = lines.map((line) => {
     const comp = computeLine(
@@ -173,13 +186,13 @@ export function computeSaleTotals(
       isIntraState
     );
 
-    const lineSubtotal = comp.taxable_paise + comp.discount_paise;
+    const lineSubtotal = BigInt(comp.taxable_paise) + BigInt(comp.discount_paise);
     sumSubtotal += lineSubtotal;
-    sumDiscount += comp.discount_paise;
-    sumTaxable += comp.taxable_paise;
-    sumCgst += comp.cgst_paise;
-    sumSgst += comp.sgst_paise;
-    sumIgst += comp.igst_paise;
+    sumDiscount += BigInt(comp.discount_paise);
+    sumTaxable += BigInt(comp.taxable_paise);
+    sumCgst += BigInt(comp.cgst_paise);
+    sumSgst += BigInt(comp.sgst_paise);
+    sumIgst += BigInt(comp.igst_paise);
 
     return {
       ...line,
@@ -193,28 +206,28 @@ export function computeSaleTotals(
     };
   });
 
-  const totalBefore = sumTaxable + sumCgst + sumSgst + sumIgst;
+  const totalBeforeBig = sumTaxable + sumCgst + sumSgst + sumIgst;
 
   // Round-off to nearest rupee (100 paise), 50 paise rounds up
   let roundedRupees = 0n;
-  let roundedPaise = 0;
-  let roundOffPaise = 0;
+  let roundedPaise = 0n;
+  let roundOffPaise = 0n;
 
-  if (totalBefore !== 0) {
-    roundedRupees = roundDivBigInt(BigInt(totalBefore), 100n);
-    roundedPaise = Number(roundedRupees * 100n);
-    roundOffPaise = roundedPaise - totalBefore;
+  if (totalBeforeBig !== 0n) {
+    roundedRupees = roundDivBigInt(totalBeforeBig, 100n);
+    roundedPaise = roundedRupees * 100n;
+    roundOffPaise = roundedPaise - totalBeforeBig;
   }
 
   const totals: ComputedDocumentTotals = {
-    subtotal_paise: sumSubtotal,
-    discount_paise: sumDiscount,
-    taxable_paise: sumTaxable,
-    cgst_paise: sumCgst,
-    sgst_paise: sumSgst,
-    igst_paise: sumIgst,
-    round_off_paise: roundOffPaise,
-    total_amount_paise: roundedPaise,
+    subtotal_paise: Number(sumSubtotal),
+    discount_paise: Number(sumDiscount),
+    taxable_paise: Number(sumTaxable),
+    cgst_paise: Number(sumCgst),
+    sgst_paise: Number(sumSgst),
+    igst_paise: Number(sumIgst),
+    round_off_paise: Number(roundOffPaise),
+    total_amount_paise: Number(roundedPaise),
   };
 
   return {
@@ -224,11 +237,22 @@ export function computeSaleTotals(
 }
 
 /**
+ * Computes line subtotal in integer paise using BigInt round-half-up arithmetic.
+ */
+export function computeLineSubtotalPaise(unitPricePaise: number, quantityMilli: number): number {
+  const pBig = BigInt(Math.max(0, Math.floor(unitPricePaise)));
+  const qBig = BigInt(Math.max(0, Math.floor(quantityMilli)));
+  return Number(roundDivBigInt(pBig * qBig, 1000n));
+}
+
+/**
  * Currency formatter: paise to INR string (e.g. 11800 -> ₹118.00)
+ * Guarantees integer paise rounding to prevent malformed decimals like ₹44.98.5.
  */
 export function formatPaise(paise: number, includeSymbol = true): string {
-  const isNegative = paise < 0;
-  const absPaise = Math.abs(paise);
+  const rounded = Math.round(paise);
+  const isNegative = rounded < 0;
+  const absPaise = Math.abs(rounded);
   const rupees = Math.floor(absPaise / 100);
   const cents = (absPaise % 100).toString().padStart(2, '0');
   const formatted = `${isNegative ? '-' : ''}${rupees.toLocaleString('en-IN')}.${cents}`;
