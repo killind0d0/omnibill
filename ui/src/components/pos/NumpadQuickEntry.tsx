@@ -1,11 +1,16 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { Delete, CornerDownLeft, Sparkles, Hash, Barcode } from 'lucide-react';
+import { ResourceItem } from '../../types/pos';
+import { PredictiveSearchDropdown } from './PredictiveSearchDropdown';
+import { posSound } from '../../lib/sound';
 
 interface NumpadQuickEntryProps {
   value: string;
   onChange: (val: string) => void;
   onSubmit: (val: string) => void;
   onOpenItemSearch: () => void;
+  products?: ResourceItem[];
+  onSelectProduct?: (product: ResourceItem, quantityMilli: number) => void;
 }
 
 export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
@@ -13,13 +18,21 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
   onChange,
   onSubmit,
   onOpenItemSearch,
+  products = [],
+  onSelectProduct,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [isDropdownDismissed, setIsDropdownDismissed] = useState(false);
 
   // Keep input focused unless modal is open
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Reset dropdown dismissal when user types new characters
+  useEffect(() => {
+    setIsDropdownDismissed(false);
+  }, [value]);
 
   const handleKeyPress = (char: string) => {
     onChange(value + char);
@@ -42,8 +55,25 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
     }
   };
 
+  const handleSelectPredictedProduct = (product: ResourceItem, quantityMilli: number) => {
+    if (onSelectProduct) {
+      posSound.playItemAdd();
+      onSelectProduct(product, quantityMilli);
+      onChange('');
+      inputRef.current?.focus();
+    }
+  };
+
+  // Determine if prediction dropdown should open
+  // Trigger when user typed something that is not just an empty string
+  const showPredictions =
+    !isDropdownDismissed &&
+    value.trim().length >= 1 &&
+    products.length > 0 &&
+    Boolean(onSelectProduct);
+
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col space-y-2.5 shadow-md">
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col space-y-2.5 shadow-md relative">
       {/* Header & Syntax Hint */}
       <div className="flex items-center justify-between text-xs text-slate-400 select-none">
         <div className="flex items-center space-x-1.5 font-medium text-slate-300">
@@ -52,12 +82,12 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
         </div>
         <div className="flex items-center space-x-1 font-mono text-[11px] text-blue-400/90 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
           <Sparkles className="w-3 h-3" />
-          <span>Qty * Price (e.g. 3*120) or Barcode</span>
+          <span>Type SKU, Name or 'Qty*Price'</span>
         </div>
       </div>
 
-      {/* Main Input Field */}
-      <div className="flex items-center space-x-2">
+      {/* Main Input Field with Floating Predictive Dropdown */}
+      <div className="flex items-center space-x-2 relative">
         <div className="relative flex-1">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
             <Barcode className="w-4 h-4" />
@@ -73,12 +103,23 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
                 handleSubmit();
               }
             }}
-            placeholder="Scan barcode, or type '3*120' or SKU..."
+            placeholder="Type product name, SKU, scan barcode, or '3*120'..."
             className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 rounded-lg pl-9 pr-4 py-2 font-mono text-sm text-white placeholder-slate-500 transition-all"
             autoComplete="off"
             spellCheck="false"
           />
+
+          {/* Real-Time Predictive Autocomplete Dropdown */}
+          <PredictiveSearchDropdown
+            query={value}
+            products={products}
+            isOpen={showPredictions}
+            onSelect={handleSelectPredictedProduct}
+            onClose={() => setIsDropdownDismissed(true)}
+            anchorPosition="top"
+          />
         </div>
+
         <button
           type="button"
           onClick={handleSubmit}
@@ -99,7 +140,7 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
             onClick={() => {
               if (value.includes('*')) {
                 const parts = value.split('*');
-                onChange(`${qty}*${parts[1] || ''}`);
+                onChange(`${qty}*${parts.slice(1).join('*')}`);
               } else {
                 onChange(`${qty}*`);
               }
@@ -152,11 +193,10 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
         ))}
         <button
           type="button"
-          onClick={() => handleKeyPress('*')}
-          className="h-9 bg-indigo-950/40 hover:bg-indigo-900/60 active:bg-indigo-800/80 border border-indigo-800/30 text-indigo-300 font-mono font-bold rounded-lg text-base transition-colors"
-          title="Multiply Qty * Rate"
+          onClick={handleBackspace}
+          className="h-9 bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 text-slate-300 font-mono font-medium rounded-lg text-sm flex items-center justify-center transition-colors"
         >
-          *
+          <Delete className="w-4 h-4" />
         </button>
 
         {['1', '2', '3'].map((k) => (
@@ -171,40 +211,29 @@ export const NumpadQuickEntry: React.FC<NumpadQuickEntryProps> = ({
         ))}
         <button
           type="button"
-          onClick={handleBackspace}
-          className="h-9 bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 text-slate-300 rounded-lg flex items-center justify-center transition-colors"
-          title="Backspace"
+          onClick={() => handleKeyPress('*')}
+          className="h-9 bg-blue-950/40 hover:bg-blue-900/60 active:bg-blue-800/80 border border-blue-800/30 text-blue-300 font-mono font-bold rounded-lg text-base transition-colors"
+          title="Quantity Multiplier"
         >
-          <Delete className="w-4 h-4" />
+          *
         </button>
 
-        <button
-          type="button"
-          onClick={() => handleKeyPress('0')}
-          className="h-9 bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 text-white font-mono font-medium rounded-lg text-sm transition-colors"
-        >
-          0
-        </button>
-        <button
-          type="button"
-          onClick={() => handleKeyPress('00')}
-          className="h-9 bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 text-white font-mono font-medium rounded-lg text-xs transition-colors"
-        >
-          00
-        </button>
-        <button
-          type="button"
-          onClick={() => handleKeyPress('.')}
-          className="h-9 bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 text-white font-mono font-bold rounded-lg text-sm transition-colors"
-        >
-          .
-        </button>
+        {['0', '00', '.'].map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => handleKeyPress(k)}
+            className="h-9 bg-slate-800/80 hover:bg-slate-700 active:bg-slate-600 text-white font-mono font-medium rounded-lg text-sm transition-colors"
+          >
+            {k}
+          </button>
+        ))}
         <button
           type="button"
           onClick={handleSubmit}
-          className="h-9 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-mono font-semibold rounded-lg text-xs flex items-center justify-center transition-colors"
+          className="h-9 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-mono font-bold rounded-lg text-xs flex items-center justify-center transition-colors shadow-sm shadow-emerald-600/30"
         >
-          OK
+          ADD
         </button>
       </div>
     </div>

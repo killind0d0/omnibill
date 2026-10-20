@@ -34,6 +34,8 @@ import {
 } from './types';
 import { VerticalIPCBridge } from './ipc';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
+import { posSound } from '../lib/sound';
+import { PredictiveSearchDropdown } from '../components/pos/PredictiveSearchDropdown';
 
 export const WholesaleBilling: React.FC = () => {
   // State
@@ -145,6 +147,7 @@ export const WholesaleBilling: React.FC = () => {
 
   // Add Resource to Cart with first available Lot
   const addResourceToInvoice = (resource: ResourceItem, initialUnits = 1) => {
+    posSound.playItemAdd();
     const defaultLot = resource.lots && resource.lots.length > 0 ? resource.lots[0] : undefined;
 
     const newLine: VerticalCartLine = {
@@ -414,8 +417,29 @@ export const WholesaleBilling: React.FC = () => {
             </span>
           </div>
 
-          {/* Quick Add Dropdown */}
-          <div className="flex items-center space-x-2 w-full sm:w-auto">
+          {/* Quick Add with Predictive Autocomplete & Select Fallback */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center space-y-2 sm:space-y-0 sm:space-x-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-64">
+              <input
+                type="text"
+                placeholder="Type item name, SKU to add..."
+                value={itemSearchQuery}
+                onChange={(e) => setItemSearchQuery(e.target.value)}
+                className="w-full px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono"
+              />
+              <PredictiveSearchDropdown
+                query={itemSearchQuery}
+                products={catalog}
+                isOpen={itemSearchQuery.trim().length >= 1}
+                onSelect={(res, qtyMilli) => {
+                  addResourceToInvoice(res, Math.max(1, Math.round(qtyMilli / 1000)));
+                  setItemSearchQuery('');
+                }}
+                onClose={() => setItemSearchQuery('')}
+                anchorPosition="bottom"
+              />
+            </div>
+
             <select
               onChange={(e) => {
                 const res = catalog.find((r) => r.id === e.target.value);
@@ -426,7 +450,7 @@ export const WholesaleBilling: React.FC = () => {
               className="px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-blue-500"
             >
               <option value="" disabled>
-                + Add Bulk Item to Invoice...
+                + Catalog List...
               </option>
               {catalog.map((item) => (
                 <option key={item.id} value={item.id}>

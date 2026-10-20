@@ -36,6 +36,13 @@ export const VerticalBillingApp: React.FC<VerticalBillingAppProps> = ({
   const [historyList, setHistoryList] = useState<PostedTransactionReceipt[]>([]);
   const [selectedReceipt, setSelectedReceipt] = useState<PostedTransactionReceipt | null>(null);
 
+  // Sync when initialVertical changes
+  React.useEffect(() => {
+    if (initialVertical) {
+      setCurrentVertical(initialVertical);
+    }
+  }, [initialVertical]);
+
   const activeConfig = VERTICALS.find((v) => v.id === currentVertical) || VERTICALS[0];
 
   const openHistory = () => {

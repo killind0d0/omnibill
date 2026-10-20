@@ -30,6 +30,7 @@ import {
   apiPostSale,
   posStorage,
 } from '../../lib/api';
+import { posSound } from '../../lib/sound';
 
 export const LightningPOS: React.FC = () => {
   // Application Modes
@@ -168,8 +169,10 @@ export const LightningPOS: React.FC = () => {
         (p) => p.barcode === barcode || p.sku.toLowerCase() === barcode.toLowerCase()
       );
       if (found) {
+        posSound.playScan();
         addProductToCart(found, 1000);
       } else {
+        posSound.playWarning();
         showToast(`Barcode not found: ${barcode}`);
       }
     },
@@ -348,9 +351,11 @@ export const LightningPOS: React.FC = () => {
     const sale = buildCompletedSale(payment);
     const res = await apiPostSale(sale);
     if (!res.success) {
+      posSound.playWarning();
       showToast(`Payment error: ${res.error || 'Failed to post transaction'}`);
       return;
     }
+    posSound.playSuccess();
     setLastCompletedSale(sale);
     setIsPaymentOpen(false);
     setIsReceiptOpen(true);
@@ -363,9 +368,11 @@ export const LightningPOS: React.FC = () => {
     const sale = buildCompletedSale();
     const res = await apiPostSale(sale);
     if (!res.success) {
+      posSound.playWarning();
       showToast(`Sale error: ${res.error || 'Failed to post transaction'}`);
       return;
     }
+    posSound.playSuccess();
     setLastCompletedSale(sale);
     setIsReceiptOpen(true);
     refreshProducts();
@@ -500,12 +507,14 @@ export const LightningPOS: React.FC = () => {
               isIntraState={isIntraState}
             />
 
-            {/* Numpad Quick Entry Bar */}
+            {/* Numpad Quick Entry Bar with Real-Time Predictive Autocomplete */}
             <NumpadQuickEntry
               value={numpadValue}
               onChange={setNumpadValue}
               onSubmit={handleNumpadSubmit}
               onOpenItemSearch={() => setIsSearchOpen(true)}
+              products={products}
+              onSelectProduct={(prod, qty) => addProductToCart(prod, qty)}
             />
           </div>
 

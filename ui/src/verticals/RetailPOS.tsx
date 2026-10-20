@@ -32,6 +32,8 @@ import { VerticalIPCBridge } from './ipc';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
 import { buildUpiString, generateQrDataUrl } from '../lib/upi';
 import { useBarcodeScanner } from '../lib/scanner';
+import { posSound } from '../lib/sound';
+import { PredictiveSearchDropdown } from '../components/pos/PredictiveSearchDropdown';
 
 export const RetailPOS: React.FC = () => {
   // State
@@ -80,24 +82,27 @@ export const RetailPOS: React.FC = () => {
     );
 
     if (matchedItem) {
+      posSound.playScan();
       addItemToCart(matchedItem);
       setScanNotification(`Scanned: ${matchedItem.name}`);
       setTimeout(() => setScanNotification(null), 2500);
       setBarcodeInput('');
     } else {
+      posSound.playWarning();
       setScanNotification(`⚠️ Barcode not found: ${cleanCode}`);
       setTimeout(() => setScanNotification(null), 3000);
     }
   };
 
   // Add Item to Cart
-  const addItemToCart = (item: ResourceItem) => {
+  const addItemToCart = (item: ResourceItem, qtyMilli: number = 1000) => {
+    posSound.playItemAdd();
     setCart((prev) => {
       const existingIndex = prev.findIndex((line) => line.resource_id === item.id);
       if (existingIndex >= 0) {
         const copy = [...prev];
         const existing = copy[existingIndex];
-        const newQty = existing.quantity_milli + 1000;
+        const newQty = existing.quantity_milli + qtyMilli;
         copy[existingIndex] = {
           ...existing,
           quantity_milli: newQty,
@@ -116,7 +121,7 @@ export const RetailPOS: React.FC = () => {
         hsn_sac: item.hsn_sac,
         unit: item.unit,
         tax_rate_bps: item.tax_rate_bps,
-        quantity_milli: 1000,
+        quantity_milli: qtyMilli,
         unit_price_paise: item.base_price_paise,
         mrp_paise: item.mrp_paise,
         discount_paise: 0,
@@ -314,6 +319,19 @@ export const RetailPOS: React.FC = () => {
               >
                 Scan Add
               </button>
+
+              {/* Predictive Product Suggestions Dropdown */}
+              <PredictiveSearchDropdown
+                query={barcodeInput}
+                products={catalog}
+                isOpen={barcodeInput.trim().length >= 1}
+                onSelect={(prod, qty) => {
+                  addItemToCart(prod, qty);
+                  setBarcodeInput('');
+                }}
+                onClose={() => setBarcodeInput('')}
+                anchorPosition="bottom"
+              />
             </div>
 
             {/* Customer Quick Tag */}
