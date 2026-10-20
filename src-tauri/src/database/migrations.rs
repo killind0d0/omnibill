@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Result};
 
-pub const LATEST_VERSION: i32 = 1;
+pub const LATEST_VERSION: i32 = 2;
 
 pub struct Migration {
     pub version: i32,
@@ -13,6 +13,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 1,
         description: "Initial V2 REA and Ledger schema with immutability triggers",
         sql: SCHEMA_V2_SQL,
+    },
+    Migration {
+        version: 2,
+        description: "Hardening triggers for transaction_items, payments, payment_allocations, and transactions update guard",
+        sql: MIGRATION_2_SQL,
     },
 ];
 
@@ -228,14 +233,76 @@ BEGIN
 END;
 "#;
 
-/// Runs all pending migrations up to LATEST_VERSION.
+pub const MIGRATION_2_SQL: &str = r#"
+-- 1. Trigger blocking ALL UPDATE on transaction_items
+CREATE TRIGGER IF NOT EXISTS trg_transaction_items_no_update
+BEFORE UPDATE ON transaction_items
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: UPDATE on transaction_items is forbidden.');
+END;
+
+-- 2. Triggers blocking UPDATE and DELETE on payments
+CREATE TRIGGER IF NOT EXISTS trg_payments_no_update
+BEFORE UPDATE ON payments
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: UPDATE on payments is forbidden.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_payments_no_delete
+BEFORE DELETE ON payments
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: DELETE on payments is forbidden.');
+END;
+
+-- 3. Triggers blocking UPDATE and DELETE on payment_allocations
+CREATE TRIGGER IF NOT EXISTS trg_payment_allocations_no_update
+BEFORE UPDATE ON payment_allocations
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: UPDATE on payment_allocations is forbidden.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_payment_allocations_no_delete
+BEFORE DELETE ON payment_allocations
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: DELETE on payment_allocations is forbidden.');
+END;
+
+-- 4. Trigger on transactions: UPDATE is allowed ONLY when every column except `status` is unchanged,
+--    and status may only go POSTED -> CANCELLED. Any other UPDATE raises IMMUTABILITY_RULE_BROKEN.
+CREATE TRIGGER IF NOT EXISTS trg_transactions_update_guard
+BEFORE UPDATE ON transactions
+BEGIN
+    SELECT RAISE(ABORT, 'IMMUTABILITY_RULE_BROKEN: Only status transition from POSTED to CANCELLED is allowed; all other columns must remain unchanged.')
+    WHERE NOT (
+        OLD.status = 'POSTED' AND NEW.status = 'CANCELLED' AND
+        OLD.id IS NEW.id AND
+        OLD.seller_state_code IS NEW.seller_state_code AND
+        OLD.place_of_supply_state_code IS NEW.place_of_supply_state_code AND
+        OLD.series IS NEW.series AND
+        OLD.invoice_number IS NEW.invoice_number AND
+        OLD.entity_id IS NEW.entity_id AND
+        OLD.subtotal_paise IS NEW.subtotal_paise AND
+        OLD.discount_paise IS NEW.discount_paise AND
+        OLD.taxable_paise IS NEW.taxable_paise AND
+        OLD.cgst_paise IS NEW.cgst_paise AND
+        OLD.sgst_paise IS NEW.sgst_paise AND
+        OLD.igst_paise IS NEW.igst_paise AND
+        OLD.total_amount_paise IS NEW.total_amount_paise AND
+        OLD.notes IS NEW.notes AND
+        OLD.created_by_user_id IS NEW.created_by_user_id AND
+        OLD.created_at IS NEW.created_at
+    );
+END;
+"#;
+
+/// Runs all pending migrations in `migrations` up to the highest version specified.
 /// Uses PRAGMA user_version.
 /// Running migrations multiple times is a no-op.
 /// Each migration executes inside its own transaction.
-pub fn run_migrations(conn: &mut Connection) -> Result<()> {
+pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result<()> {
     let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
-    for migration in MIGRATIONS {
+    for migration in migrations {
         if migration.version > current_version {
             let tx = conn.transaction()?;
             tx.execute_batch(migration.sql)?;

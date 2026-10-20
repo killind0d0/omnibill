@@ -29,15 +29,15 @@ pub fn apply_pragmas(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use migrations::{get_user_version, run_migrations, LATEST_VERSION};
-    use queries::verify_ledger;
+    use migrations::{get_user_version, run_migrations, Migration, LATEST_VERSION, MIGRATIONS};
+    use queries::{verify_ledger, LedgerDiscrepancy};
     use rusqlite::params;
     use std::fs;
 
     fn setup_migrated_in_memory_db() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
         apply_pragmas(&conn).unwrap();
-        run_migrations(&mut conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
         conn
     }
 
@@ -88,7 +88,7 @@ mod tests {
         let initial_version = get_user_version(&conn).unwrap();
         assert_eq!(initial_version, 0, "Fresh DB must start at user_version 0");
 
-        run_migrations(&mut conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
 
         let migrated_version = get_user_version(&conn).unwrap();
         assert_eq!(
@@ -103,11 +103,11 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         apply_pragmas(&conn).unwrap();
 
-        run_migrations(&mut conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
         let version_after_first = get_user_version(&conn).unwrap();
         assert_eq!(version_after_first, LATEST_VERSION);
 
-        run_migrations(&mut conn).unwrap();
+        run_migrations(&mut conn, MIGRATIONS).unwrap();
         let version_after_second = get_user_version(&conn).unwrap();
         assert_eq!(version_after_second, LATEST_VERSION);
     }
@@ -537,11 +537,15 @@ mod tests {
             [],
         ).unwrap();
 
-        let imbalanced_ids = verify_ledger(&conn).unwrap();
-        assert_eq!(
-            imbalanced_ids,
-            vec!["tx_unbal".to_string()],
-            "verify_ledger must flag the unbalanced transaction ID"
+        let imbalanced = verify_ledger(&conn).unwrap();
+        assert!(
+            imbalanced.iter().any(|d| match d {
+                LedgerDiscrepancy::UnbalancedTransaction { transaction_id, net_difference_paise } => {
+                    transaction_id == "tx_unbal" && *net_difference_paise == 1000
+                }
+                _ => false,
+            }),
+            "verify_ledger must flag UnbalancedTransaction for tx_unbal"
         );
 
         // Balance the transaction with matching credit
@@ -552,9 +556,9 @@ mod tests {
             [],
         ).unwrap();
 
-        let balanced_ids = verify_ledger(&conn).unwrap();
+        let balanced = verify_ledger(&conn).unwrap();
         assert!(
-            balanced_ids.is_empty(),
+            balanced.is_empty(),
             "verify_ledger must return an empty list for balanced ledger"
         );
     }
@@ -704,7 +708,7 @@ mod tests {
         let conn = setup_migrated_in_memory_db();
         seed_minimal_fixtures(&conn);
 
-        // 1. Structural check via PRAGMA foreign_key_list(ledger_entries)
+        // Structural check via PRAGMA foreign_key_list(ledger_entries)
         let mut stmt = conn.prepare("PRAGMA foreign_key_list(ledger_entries)").unwrap();
         let fk_rows = stmt
             .query_map([], |row| {
@@ -737,7 +741,7 @@ mod tests {
         }
         assert!(fk_count >= 3, "Expected at least 3 foreign keys (accounts, transactions, payments)");
 
-        // 2. Functional check: Attempting to delete a referenced account fails with foreign key violation
+        // Functional check: Attempting to delete a referenced account fails with foreign key violation
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
@@ -793,7 +797,6 @@ mod tests {
             col_names.push(name);
         }
 
-        // Expected schema columns only
         assert_eq!(
             col_names,
             vec!["id", "code", "name", "type", "created_at"],
@@ -807,42 +810,405 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         apply_pragmas(&conn).unwrap();
 
-        // 1. Initial state: run valid migration 1
-        run_migrations(&mut conn).unwrap();
-        let initial_version = get_user_version(&conn).unwrap();
-        assert_eq!(initial_version, 1);
+        let test_migrations = [
+            Migration {
+                version: 1,
+                description: "Valid first migration",
+                sql: migrations::SCHEMA_V2_SQL,
+            },
+            Migration {
+                version: 2,
+                description: "Failing second migration with invalid SQL syntax",
+                sql: "CREATE TABLE temp_canary_fail (id TEXT PRIMARY KEY); SYNTAX_ERROR_MALFORMED_SQL;",
+            },
+        ];
 
-        // 2. Simulate a failing migration #2 inside a transaction
-        let failed_run: Result<(), rusqlite::Error> = (|| {
-            let tx = conn.transaction()?;
-            // Step A: Creates a canary table
-            tx.execute_batch("CREATE TABLE temp_migration_canary (id TEXT PRIMARY KEY);")?;
-            // Step B: Malformed SQL that causes syntax error
-            tx.execute_batch("MALFORMED SYNTAX ERROR HERE;")?;
-            // Step C: Would advance user_version if it hadn't failed
-            tx.pragma_update(None, "user_version", 2)?;
-            tx.commit()?;
-            Ok(())
-        })();
+        let result = run_migrations(&mut conn, &test_migrations);
+        assert!(result.is_err(), "run_migrations must return Err when a migration fails");
 
-        assert!(failed_run.is_err(), "Simulated migration must return an error");
-
-        // 3. Assert canary table was completely rolled back and does NOT exist
-        let canary_exists: bool = conn
+        // 1. First migration's state is kept
+        let users_table_exists: bool = conn
             .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'temp_migration_canary'",
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'users'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(!canary_exists, "Canary table from rolled-back migration must not exist");
+        assert!(users_table_exists, "Migration 1 tables must remain intact");
 
-        // 4. Assert user_version remains completely unchanged
-        let post_fail_version = get_user_version(&conn).unwrap();
+        // 2. user_version equals the last successful version (1)
+        let version = get_user_version(&conn).unwrap();
+        assert_eq!(version, 1, "user_version must equal 1 (the last successful migration version)");
+
+        // 3. No partial tables from the failed migration exist
+        let canary_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'temp_canary_fail'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!canary_exists, "No partial tables from failed migration must exist");
+    }
+
+    // 18. UPDATE on transaction_items fails
+    #[test]
+    fn test_18_update_on_transaction_items_fails() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_item_up', 'POSTED', '27', '27', 'INV', 'INV/26-27/0050', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        // Control insert into transaction_items succeeds
+        let ctrl_res = conn.execute(
+            "INSERT INTO transaction_items (
+                id, transaction_id, resource_id, lot_id, quantity_milli,
+                unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
+                cgst_paise, sgst_paise, igst_paise, line_total_paise
+            ) VALUES ('ti_ctrl_18', 'tx_item_up', 'res_1', NULL, 1000, 1000, 0, 1000, 0, 0, 0, 0, 1000)",
+            [],
+        );
+        assert!(ctrl_res.is_ok(), "Control insert must succeed: {:?}", ctrl_res.err());
+
+        // UPDATE must fail via trigger
+        let up_res = conn.execute(
+            "UPDATE transaction_items SET quantity_milli = 2000 WHERE id = 'ti_ctrl_18'",
+            [],
+        );
+        assert!(up_res.is_err(), "UPDATE on transaction_items must be blocked");
+        let err_msg = up_res.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("IMMUTABILITY_RULE_BROKEN"),
+            "Expected 'IMMUTABILITY_RULE_BROKEN', got: {}",
+            err_msg
+        );
+    }
+
+    // 19. UPDATE and DELETE on payments fail; same for payment_allocations
+    #[test]
+    fn test_19_update_and_delete_on_payments_and_allocations_fail() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_pay_19', 'POSTED', '27', '27', 'INV', 'INV/26-27/0051', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        // Control insert payment
+        let pay_ctrl = conn.execute(
+            "INSERT INTO payments (id, payment_number, entity_id, payment_mode, amount_paise, created_by_user_id)
+             VALUES ('pay_ctrl_19', 'REC/26-27/0051', 'ent_1', 'CASH', 1000, 'usr_1')",
+            [],
+        );
+        assert!(pay_ctrl.is_ok(), "Control payment insert must succeed");
+
+        // UPDATE payments fails
+        let pay_up = conn.execute("UPDATE payments SET amount_paise = 2000 WHERE id = 'pay_ctrl_19'", []);
+        assert!(pay_up.is_err());
+        assert!(pay_up.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // DELETE payments fails
+        let pay_del = conn.execute("DELETE FROM payments WHERE id = 'pay_ctrl_19'", []);
+        assert!(pay_del.is_err());
+        assert!(pay_del.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // Control insert payment_allocations
+        let alloc_ctrl = conn.execute(
+            "INSERT INTO payment_allocations (id, payment_id, transaction_id, amount_allocated_paise)
+             VALUES ('pa_ctrl_19', 'pay_ctrl_19', 'tx_pay_19', 1000)",
+            [],
+        );
+        assert!(alloc_ctrl.is_ok(), "Control allocation insert must succeed");
+
+        // UPDATE payment_allocations fails
+        let alloc_up = conn.execute("UPDATE payment_allocations SET amount_allocated_paise = 500 WHERE id = 'pa_ctrl_19'", []);
+        assert!(alloc_up.is_err());
+        assert!(alloc_up.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // DELETE payment_allocations fails
+        let alloc_del = conn.execute("DELETE FROM payment_allocations WHERE id = 'pa_ctrl_19'", []);
+        assert!(alloc_del.is_err());
+        assert!(alloc_del.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+    }
+
+    // 20. UPDATE of transactions.total_amount_paise fails; UPDATE of status POSTED -> CANCELLED succeeds; CANCELLED -> POSTED fails
+    #[test]
+    fn test_20_transactions_update_guard_rules() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_guard', 'POSTED', '27', '27', 'INV', 'INV/26-27/0060', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        // 1. UPDATE total_amount_paise must FAIL
+        let up_amount = conn.execute(
+            "UPDATE transactions SET total_amount_paise = 2000 WHERE id = 'tx_guard'",
+            [],
+        );
+        assert!(up_amount.is_err(), "Modifying transaction amounts must be blocked");
+        assert!(up_amount.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+
+        // 2. UPDATE status POSTED -> CANCELLED (all other columns unchanged) must SUCCEED
+        let up_cancel = conn.execute(
+            "UPDATE transactions SET status = 'CANCELLED' WHERE id = 'tx_guard'",
+            [],
+        );
+        assert!(up_cancel.is_ok(), "POSTED -> CANCELLED must succeed: {:?}", up_cancel.err());
+
+        let current_status: String = conn
+            .query_row("SELECT status FROM transactions WHERE id = 'tx_guard'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(current_status, "CANCELLED");
+
+        // 3. UPDATE CANCELLED -> POSTED must FAIL
+        let up_unfreeze = conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_guard'",
+            [],
+        );
+        assert!(up_unfreeze.is_err(), "Reverting CANCELLED to POSTED must be rejected");
+        assert!(up_unfreeze.unwrap_err().to_string().contains("IMMUTABILITY_RULE_BROKEN"));
+    }
+
+    // 21. ledger_entries with transaction_id NULL and payment_id NULL fails
+    #[test]
+    fn test_21_ledger_entries_null_references_fail() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_21', 'POSTED', '27', '27', 'INV', 'INV/26-27/0070', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO payments (id, payment_number, entity_id, payment_mode, amount_paise, created_by_user_id)
+             VALUES ('pay_21', 'REC/26-27/0070', 'ent_1', 'CASH', 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        // Control 1: transaction_id not null succeeds
+        let ctrl_tx = conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_ctrl_tx', 'tx_21', NULL, 'acc_ar', 1000, 0, 'Valid tx')",
+            [],
+        );
+        assert!(ctrl_tx.is_ok(), "Control transaction ledger entry must succeed");
+
+        // Control 2: payment_id not null succeeds
+        let ctrl_pay = conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_ctrl_pay', NULL, 'pay_21', 'acc_ar', 0, 1000, 'Valid pay')",
+            [],
+        );
+        assert!(ctrl_pay.is_ok(), "Control payment ledger entry must succeed");
+
+        // Failure: both transaction_id and payment_id are NULL
+        let fail_nulls = conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_fail_nulls', NULL, NULL, 'acc_ar', 1000, 0, 'Invalid orphaned entry')",
+            [],
+        );
+        assert!(fail_nulls.is_err(), "Orphaned ledger entry must be rejected");
+        assert!(fail_nulls.unwrap_err().to_string().contains("CHECK constraint failed"));
+    }
+
+    // 22. stock_movements with quantity_delta_milli = 0 fails
+    #[test]
+    fn test_22_stock_movements_zero_quantity_fails() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_22', 'POSTED', '27', '27', 'INV', 'INV/26-27/0072', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        // Control: positive delta succeeds
+        let ctrl_pos = conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_pos', 'res_1', NULL, 'tx_22', 'PURCHASE', 1000)",
+            [],
+        );
+        assert!(ctrl_pos.is_ok(), "Positive quantity movement must succeed");
+
+        // Control: negative delta succeeds
+        let ctrl_neg = conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_neg', 'res_1', NULL, 'tx_22', 'SALE', -1000)",
+            [],
+        );
+        assert!(ctrl_neg.is_ok(), "Negative quantity movement must succeed");
+
+        // Failure: zero delta fails
+        let fail_zero = conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_zero', 'res_1', NULL, 'tx_22', 'ADJUSTMENT', 0)",
+            [],
+        );
+        assert!(fail_zero.is_err(), "Zero quantity movement must fail");
+        assert!(fail_zero.unwrap_err().to_string().contains("CHECK constraint failed"));
+    }
+
+    // 23. one invalid value each for users.role, entities.entity_type, accounts.type, stock_movements.reason is rejected
+    #[test]
+    fn test_23_enum_check_constraints_rejected() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // 1. users.role
+        let user_fail = conn.execute(
+            "INSERT INTO users (id, username, password_hash, full_name, role)
+             VALUES ('u_bad', 'hacker', 'hash', 'Bob', 'SUPERUSER')",
+            [],
+        );
+        assert!(user_fail.is_err());
+        assert!(user_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+
+        // 2. entities.entity_type
+        let ent_fail = conn.execute(
+            "INSERT INTO entities (id, entity_code, entity_type, full_name, state_code)
+             VALUES ('e_bad', 'E-BAD', 'VENDOR_INVALID', 'Bad Vendor', '27')",
+            [],
+        );
+        assert!(ent_fail.is_err());
+        assert!(ent_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+
+        // 3. accounts.type
+        let acc_fail = conn.execute(
+            "INSERT INTO accounts (id, code, name, type)
+             VALUES ('a_bad', '9999', 'Crypto Pool', 'EQUITY_INVALID')",
+            [],
+        );
+        assert!(acc_fail.is_err());
+        assert!(acc_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+
+        // 4. stock_movements.reason
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_23', 'POSTED', '27', '27', 'INV', 'INV/26-27/0073', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        let sm_fail = conn.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES ('sm_bad', 'res_1', NULL, 'tx_23', 'STOLEN', -100)",
+            [],
+        );
+        assert!(sm_fail.is_err());
+        assert!(sm_fail.unwrap_err().to_string().contains("CHECK constraint failed"));
+    }
+
+    // 24. verify_ledger: unbalanced payment is found; POSTED transaction with no entries is found; a fully balanced database returns nothing
+    #[test]
+    fn test_24_verify_ledger_diagnostics() {
+        let conn = setup_migrated_in_memory_db();
+        seed_minimal_fixtures(&conn);
+
+        // 1. Initially empty database -> fully balanced returns nothing
+        let initial_issues = verify_ledger(&conn).unwrap();
+        assert!(initial_issues.is_empty(), "Empty ledger must report zero issues");
+
+        // 2. Insert a POSTED transaction with no ledger entries -> should be flagged
+        conn.execute(
+            "INSERT INTO transactions (
+                id, status, seller_state_code, place_of_supply_state_code, series,
+                invoice_number, entity_id, subtotal_paise, taxable_paise,
+                total_amount_paise, created_by_user_id
+            ) VALUES ('tx_orphan', 'POSTED', '27', '27', 'INV', 'INV/26-27/0080', 'ent_1', 1000, 1000, 1000, 'usr_1')",
+            [],
+        ).unwrap();
+
+        let orphan_issues = verify_ledger(&conn).unwrap();
         assert_eq!(
-            post_fail_version, initial_version,
-            "user_version must remain unchanged at {} after migration failure",
-            initial_version
+            orphan_issues,
+            vec![LedgerDiscrepancy::PostedTransactionWithoutEntries {
+                transaction_id: "tx_orphan".to_string()
+            }],
+            "Must flag POSTED transaction without ledger entries"
+        );
+
+        // Balance the transaction
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_tx_d', 'tx_orphan', 'acc_ar', 1000, 0, 'Tx debit')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_tx_c', 'tx_orphan', 'acc_sales', 0, 1000, 'Tx credit')",
+            [],
+        ).unwrap();
+
+        let tx_balanced_issues = verify_ledger(&conn).unwrap();
+        assert!(tx_balanced_issues.is_empty(), "Balanced transaction must clear issues");
+
+        // 3. Insert payment with unbalanced ledger entries -> should be flagged
+        conn.execute(
+            "INSERT INTO payments (id, payment_number, entity_id, payment_mode, amount_paise, created_by_user_id)
+             VALUES ('pay_unbal', 'REC/26-27/0080', 'ent_1', 'CASH', 500, 'usr_1')",
+            [],
+        ).unwrap();
+
+        // Only 1-sided entry for payment
+        conn.execute(
+            "INSERT INTO ledger_entries (id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_pay_d', 'pay_unbal', 'acc_ar', 500, 0, 'Payment debit only')",
+            [],
+        ).unwrap();
+
+        let pay_issues = verify_ledger(&conn).unwrap();
+        assert!(
+            pay_issues.iter().any(|d| match d {
+                LedgerDiscrepancy::UnbalancedPayment { payment_id, net_difference_paise } => {
+                    payment_id == "pay_unbal" && *net_difference_paise == 500
+                }
+                _ => false,
+            }),
+            "Must flag UnbalancedPayment for pay_unbal"
+        );
+
+        // Balance the payment
+        conn.execute(
+            "INSERT INTO ledger_entries (id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('led_pay_c', 'pay_unbal', 'acc_sales', 0, 500, 'Payment credit')",
+            [],
+        ).unwrap();
+
+        // 4. Fully balanced database returns nothing
+        let final_issues = verify_ledger(&conn).unwrap();
+        assert!(
+            final_issues.is_empty(),
+            "Fully balanced database must return zero issues, got: {:?}",
+            final_issues
         );
     }
 }
