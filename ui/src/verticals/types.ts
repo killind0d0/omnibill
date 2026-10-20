@@ -44,6 +44,80 @@ export interface StudentEntity extends BaseEntity {
   guardian_phone: string;
   admission_no: string;
   dues_balance_paise: number;
+  address?: string;
+  dob?: string;
+  concession_category?: string;
+  paid_months?: string[];
+  monthly_fee_paise?: number;
+}
+
+// Class Fee Rule Preset
+export interface ClassFeeRule {
+  class_name: string;
+  tuition_paise: number;
+  computer_lab_paise: number;
+  sports_activity_paise: number;
+  exam_paise: number;
+  transport_paise: number;
+  total_monthly_paise: number;
+}
+
+// School Expense Record
+export interface SchoolExpense {
+  id: string;
+  date: string;
+  category: 'SALARIES' | 'UTILITIES' | 'MAINTENANCE' | 'LAB_SUPPLIES' | 'BOOKS_STATIONERY' | 'EVENTS' | 'MISC';
+  payee_name: string;
+  amount_paise: number;
+  payment_mode: PaymentMode;
+  voucher_no: string;
+  remarks: string;
+  created_by_staff: string;
+}
+
+// School Receipt Customization Settings
+export interface SchoolReceiptSettings {
+  school_name: string;
+  affiliation_details: string;
+  school_address: string;
+  phone: string;
+  email: string;
+  receipt_title: string;
+  receipt_terms: string;
+  staff_signatory_title: string;
+  watermark_enabled: boolean;
+  watermark_text: string;
+  watermark_opacity: number;
+  watermark_angle_deg: number;
+  logo_enabled: boolean;
+  logo_preset: 'SHIELD' | 'TORCH' | 'CREST' | 'CUSTOM';
+  custom_logo_url?: string;
+  logo_size_px: number;
+  logo_alignment: 'LEFT' | 'CENTER';
+}
+
+// School Fee Payment Audit Record
+export interface SchoolFeePaymentRecord {
+  id: string;
+  receipt_no: string;
+  date: string;
+  time: string;
+  student_id: string;
+  admission_no: string;
+  student_name: string;
+  class_name: string;
+  section: string;
+  academic_year: string;
+  months_paid: string[];
+  fee_heads: Array<{ name: string; amount_paise: number }>;
+  subtotal_paise: number;
+  concession_type: string;
+  concession_paise: number;
+  net_amount_paise: number;
+  payment_mode: PaymentMode;
+  transaction_ref: string;
+  staff_name: string;
+  remarks?: string;
 }
 
 // Hospital Patient
