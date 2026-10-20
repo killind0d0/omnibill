@@ -1,5 +1,5 @@
 import React from 'react';
-import { CreditCard, Printer, RotateCcw, ArrowRightLeft, User } from 'lucide-react';
+import { CreditCard, Printer, RotateCcw, ArrowRightLeft, User, Coins } from 'lucide-react';
 import { ComputedDocumentTotals, PriceMode } from '../../types/pos';
 import { formatPaise } from '../../lib/tax';
 
@@ -20,6 +20,7 @@ interface TotalsPanelProps {
   onOpenPayment: () => void;
   onSaveAndPrintSlip: () => void;
   onClearCart: () => void;
+  onOpenShift?: () => void;
 }
 
 const INDIAN_STATES = [
@@ -48,6 +49,7 @@ export const TotalsPanel: React.FC<TotalsPanelProps> = ({
   onOpenPayment,
   onSaveAndPrintSlip,
   onClearCart,
+  onOpenShift,
 }) => {
   const roundOffSign = totals.round_off_paise > 0 ? '+' : '';
 
@@ -215,6 +217,24 @@ export const TotalsPanel: React.FC<TotalsPanelProps> = ({
             Alt+S
           </kbd>
         </button>
+
+        {/* Cash Drawer & Shift Settlement Alt+Z */}
+        {onOpenShift && (
+          <button
+            type="button"
+            onClick={onOpenShift}
+            className="w-full py-1.5 px-4 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/20 text-xs flex items-center justify-between transition-colors cursor-pointer"
+            title="Open Cash Drawer Shift Settlement & Z-Report (Alt+Z)"
+          >
+            <div className="flex items-center space-x-1.5">
+              <Coins className="w-3.5 h-3.5 text-amber-400" />
+              <span>Shift & Drawer (Z-Report)</span>
+            </div>
+            <kbd className="bg-slate-900 border border-slate-800 text-amber-400/80 text-[10px] px-1.5 py-0.5 rounded">
+              Alt+Z
+            </kbd>
+          </button>
+        )}
 
         {/* Clear Cart Esc */}
         <button

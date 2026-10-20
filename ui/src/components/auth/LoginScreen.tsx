@@ -18,8 +18,10 @@ import {
   Zap,
   Store,
   Clock,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { posSound } from '../../lib/sound';
+import { CatalogImporterModal } from '../importer/CatalogImporterModal';
 
 export type BusinessType = 'RETAIL' | 'WHOLESALE' | 'SCHOOL' | 'HOSPITAL';
 
@@ -117,6 +119,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, savedSession 
   );
   const [pin, setPin] = useState<string>('1234');
   const [currentTime, setCurrentTime] = useState<string>(new Date().toLocaleTimeString());
+  const [isImporterOpen, setIsImporterOpen] = useState(false);
 
   // Clock tick
   useEffect(() => {
@@ -172,7 +175,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, savedSession 
           </div>
         </div>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => setIsImporterOpen(true)}
+            type="button"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-xs text-emerald-300 transition cursor-pointer"
+            title="Import existing inventory from Excel or CSV before opening counter"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">Import Catalog (Excel/CSV)</span>
+          </button>
+
           <div className="hidden sm:flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-300 font-mono">
             <Clock className="w-3.5 h-3.5 text-blue-400" />
             <span>{currentTime}</span>
@@ -403,6 +416,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, savedSession 
         <span>OmniBill ERP • Pure Offline System • Zero Cloud Telemetry</span>
         <span className="font-mono text-[11px]">Host: Linux • Database: SQLite WAL • Schema v3</span>
       </footer>
+
+      {/* Excel / CSV Catalog Importer */}
+      <CatalogImporterModal
+        isOpen={isImporterOpen}
+        onClose={() => setIsImporterOpen(false)}
+        onImportSuccess={() => {}}
+      />
     </div>
   );
 };

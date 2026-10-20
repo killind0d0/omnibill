@@ -18,16 +18,19 @@ import {
   Boxes,
   Clock,
   Coins,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { ResourceItem, ResourceLot } from '../types/accounting';
 import { ErpStorageService } from '../lib/erpStorage';
 import { formatPaise, formatMilliQty } from '../lib/tax';
 import { GST_RATES_BPS } from '../lib/constants';
 import { Modal } from '../components/common/Modal';
+import { CatalogImporterModal } from '../components/importer/CatalogImporterModal';
 
 export const ItemMaster: React.FC = () => {
   const [items, setItems] = useState<ResourceItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isImporterOpen, setIsImporterOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedTaxRate, setSelectedTaxRate] = useState<string>('ALL');
   const [stockFilter, setStockFilter] = useState<'ALL' | 'LOW' | 'IN_STOCK' | 'NEAR_EXPIRY'>('ALL');
@@ -313,6 +316,16 @@ export const ItemMaster: React.FC = () => {
           </div>
 
           <div className="flex items-center space-x-3">
+            {/* Bulk Import Excel / CSV Button */}
+            <button
+              onClick={() => setIsImporterOpen(true)}
+              className="flex items-center space-x-2 px-3.5 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-xs font-semibold border border-emerald-500/40 transition-colors shadow-sm cursor-pointer"
+              title="Import Inventory from Excel or CSV"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>Import Excel / CSV</span>
+            </button>
+
             {/* Quick Add Lot Button */}
             <button
               onClick={() => {
@@ -1095,6 +1108,13 @@ export const ItemMaster: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Excel / CSV Catalog Importer */}
+      <CatalogImporterModal
+        isOpen={isImporterOpen}
+        onClose={() => setIsImporterOpen(false)}
+        onImportSuccess={() => loadData()}
+      />
     </div>
   );
 };

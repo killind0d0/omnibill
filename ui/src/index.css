@@ -25,6 +25,90 @@
   background: #475569;
 }
 
+/* -------------------------------------------------------------------------
+   DAYLIGHT HIGH-CONTRAST COUNTER THEME (Zero Glare under Shop Tube Lights)
+   ------------------------------------------------------------------------- */
+html.light {
+  color-scheme: light;
+}
+
+html.light body {
+  background-color: #f1f5f9 !important; /* Crisp Slate 100 */
+  color: #0f172a !important;            /* High-contrast Slate 900 */
+}
+
+html.light .bg-slate-950 {
+  background-color: #f8fafc !important; /* Slate 50 */
+  color: #0f172a !important;
+}
+
+html.light .bg-slate-900 {
+  background-color: #ffffff !important; /* Crisp White Cards */
+  color: #0f172a !important;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.08), 0 1px 2px -1px rgb(0 0 0 / 0.06) !important;
+}
+
+html.light .bg-slate-850,
+html.light .bg-slate-800 {
+  background-color: #f1f5f9 !important;
+  color: #1e293b !important;
+}
+
+html.light .bg-slate-800\/80,
+html.light .bg-slate-900\/90,
+html.light .bg-slate-950\/80 {
+  background-color: #ffffff !important;
+}
+
+html.light .border-slate-800,
+html.light .border-slate-700,
+html.light .border-slate-800\/80,
+html.light .border-slate-700\/80 {
+  border-color: #cbd5e1 !important; /* Sharp Slate 300 Borders */
+}
+
+html.light .text-slate-100,
+html.light .text-slate-200,
+html.light .text-slate-300,
+html.light .text-white {
+  color: #0f172a !important; /* High Contrast Black/Slate 900 */
+}
+
+html.light .text-slate-400,
+html.light .text-slate-500 {
+  color: #475569 !important; /* Slate 600 */
+}
+
+html.light input,
+html.light select,
+html.light textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light input::placeholder,
+html.light select::placeholder,
+html.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+html.light kbd {
+  background-color: #e2e8f0 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light ::-webkit-scrollbar-track {
+  background: #f1f5f9 !important;
+}
+html.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1 !important;
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8 !important;
+}
+
 /* Print Styles for Thermal Slip */
 @media print {
   body * {

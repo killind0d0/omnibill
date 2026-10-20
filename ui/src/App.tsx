@@ -16,6 +16,9 @@ import {
   GraduationCap,
   HeartPulse,
   Store,
+  Sun,
+  Moon,
+  Coins,
 } from 'lucide-react';
 import { LightningPOS } from './components/pos/LightningPOS';
 import { VerticalBillingApp } from './verticals/VerticalBillingApp';
@@ -23,6 +26,7 @@ import { ItemMaster } from './pages/ItemMaster';
 import { EntityLedger } from './pages/EntityLedger';
 import { ReportsDashboard } from './pages/ReportsDashboard';
 import { LoginScreen, UserSession, BusinessType } from './components/auth/LoginScreen';
+import { ShiftSettlementModal } from './components/pos/ShiftSettlementModal';
 import { posSound } from './lib/sound';
 
 export type AppRoute = 'POS' | 'VERTICALS' | 'ITEM_MASTER' | 'ENTITY_LEDGER' | 'REPORTS';
@@ -43,9 +47,36 @@ export const App: React.FC = () => {
     return null;
   });
 
+  // Theme State (Daylight vs Midnight)
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('omnibill_theme');
+      if (stored === 'light' || stored === 'dark') return stored;
+    }
+    return 'dark';
+  });
+
+  // Sync theme to HTML class
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      if (theme === 'light') {
+        document.documentElement.classList.add('light');
+      } else {
+        document.documentElement.classList.remove('light');
+      }
+      localStorage.setItem('omnibill_theme', theme);
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+    posSound.playItemAdd();
+  };
+
   const [currentRoute, setCurrentRoute] = useState<AppRoute>('POS');
   const [showNavHelp, setShowNavHelp] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(posSound.enabled);
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
 
   // Sync route based on business type on initial load or session change
   useEffect(() => {
@@ -117,11 +148,21 @@ export const App: React.FC = () => {
         e.preventDefault();
         handleLogout();
       }
+      // Alt+T: Toggle Daylight / Midnight Mode
+      else if (e.altKey && (e.key === 't' || e.key === 'T')) {
+        e.preventDefault();
+        toggleTheme();
+      }
+      // Alt+Z: Drawer Shift Settlement & Z-Report
+      else if (e.altKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        setIsShiftModalOpen(true);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session]);
+  }, [session, theme]);
 
   // If no active session, present the clean Business Login & Onboarding Portal
   if (!session) {
@@ -142,25 +183,25 @@ export const App: React.FC = () => {
         return {
           label: 'Retail Store POS',
           icon: ShoppingBag,
-          pillClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+          pillClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
         };
       case 'WHOLESALE':
         return {
           label: 'Wholesale B2B',
           icon: Building2,
-          pillClass: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+          pillClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
         };
       case 'SCHOOL':
         return {
           label: 'School & College',
           icon: GraduationCap,
-          pillClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+          pillClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
         };
       case 'HOSPITAL':
         return {
           label: 'Hospital & Clinic',
           icon: HeartPulse,
-          pillClass: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+          pillClass: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
         };
     }
   };
@@ -320,8 +361,39 @@ export const App: React.FC = () => {
           </button>
         </nav>
 
-        {/* Global Controls: Sound, Shortcuts, Switch Store / Logout */}
+        {/* Global Controls: Shift Settlement, Daylight Theme, Sound, Shortcuts, Switch Store */}
         <div className="flex items-center space-x-2">
+          {/* Shift Drawer Settlement Button */}
+          <button
+            onClick={() => setIsShiftModalOpen(true)}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold transition cursor-pointer"
+            title="Cash Drawer Shift Settlement & Z-Report (Alt+Z)"
+          >
+            <Coins className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden lg:inline">Shift / Drawer</span>
+          </button>
+
+          {/* Daylight / Midnight Mode Toggle */}
+          <button
+            onClick={toggleTheme}
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              theme === 'light'
+                ? 'bg-amber-500/20 text-amber-600 hover:bg-amber-500/30'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+            title={
+              theme === 'light'
+                ? 'Switch to Midnight Dark Mode (Alt+T)'
+                : 'Switch to Daylight High-Contrast Mode (Alt+T)'
+            }
+          >
+            {theme === 'light' ? (
+              <Moon className="w-4 h-4 text-amber-500" />
+            ) : (
+              <Sun className="w-4 h-4 text-yellow-400" />
+            )}
+          </button>
+
           {/* POS Sound Toggle */}
           <button
             onClick={toggleSound}
@@ -395,6 +467,18 @@ export const App: React.FC = () => {
             </span>
             <span>
               <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
+                Alt+Z
+              </kbd>{' '}
+              Shift Settlement
+            </span>
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
+                Alt+T
+              </kbd>{' '}
+              Daylight Theme
+            </span>
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
                 Alt+L
               </kbd>{' '}
               Lock Counter
@@ -460,6 +544,15 @@ export const App: React.FC = () => {
           <ReportsDashboard />
         </div>
       </main>
+
+      {/* Cash Drawer Shift Settlement & Z-Report Modal */}
+      <ShiftSettlementModal
+        isOpen={isShiftModalOpen}
+        onClose={() => setIsShiftModalOpen(false)}
+        operatorName={session.operatorName}
+        counterId={session.counterId}
+        storeName={session.storeName}
+      />
     </div>
   );
 };

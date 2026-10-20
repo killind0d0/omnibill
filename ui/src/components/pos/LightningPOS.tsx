@@ -31,6 +31,8 @@ import {
   posStorage,
 } from '../../lib/api';
 import { posSound } from '../../lib/sound';
+import { shiftManager } from '../../lib/shiftManager';
+import { ShiftSettlementModal } from './ShiftSettlementModal';
 
 export const LightningPOS: React.FC = () => {
   // Application Modes
@@ -67,6 +69,7 @@ export const LightningPOS: React.FC = () => {
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -356,6 +359,7 @@ export const LightningPOS: React.FC = () => {
       return;
     }
     posSound.playSuccess();
+    shiftManager.recordTransaction(payment.mode, sale.totals.total_amount_paise);
     setLastCompletedSale(sale);
     setIsPaymentOpen(false);
     setIsReceiptOpen(true);
@@ -373,6 +377,7 @@ export const LightningPOS: React.FC = () => {
       return;
     }
     posSound.playSuccess();
+    shiftManager.recordTransaction('CASH', sale.totals.total_amount_paise);
     setLastCompletedSale(sale);
     setIsReceiptOpen(true);
     refreshProducts();
@@ -431,6 +436,13 @@ export const LightningPOS: React.FC = () => {
       if (e.key === 'F9') {
         e.preventDefault();
         setActiveMode('PURCHASES');
+        return;
+      }
+
+      // Alt+Z: Cash Drawer Shift Settlement
+      if (e.altKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        setIsShiftModalOpen(true);
         return;
       }
 
@@ -540,6 +552,7 @@ export const LightningPOS: React.FC = () => {
             onOpenPayment={() => setIsPaymentOpen(true)}
             onSaveAndPrintSlip={handleSaveAndPrintSlip}
             onClearCart={handleClearCart}
+            onOpenShift={() => setIsShiftModalOpen(true)}
           />
         </div>
       )}
@@ -584,6 +597,14 @@ export const LightningPOS: React.FC = () => {
         onClose={() => setIsReceiptOpen(false)}
         sale={lastCompletedSale}
         onConfirmComplete={handleFinishSale}
+      />
+
+      <ShiftSettlementModal
+        isOpen={isShiftModalOpen}
+        onClose={() => setIsShiftModalOpen(false)}
+        operatorName={business.legal_name || 'Cashier 1'}
+        counterId="POS-01"
+        storeName={business.trade_name || business.legal_name}
       />
     </div>
   );
