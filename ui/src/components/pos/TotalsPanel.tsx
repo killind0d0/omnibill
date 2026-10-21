@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect } from 'react';
-import { CreditCard, Printer, RotateCcw, ArrowRightLeft, User, Coins, ShieldAlert, ShieldCheck, Wallet, CheckCircle2 } from 'lucide-react';
+import { CreditCard, Printer, RotateCcw, ArrowRightLeft, User, Coins, ShieldAlert, ShieldCheck, Wallet, CheckCircle2, PauseCircle, PlayCircle } from 'lucide-react';
 import { ComputedDocumentTotals, PriceMode } from '../../types/pos';
 import { formatPaise } from '../../lib/tax';
 import { ErpStorageService } from '../../lib/erpStorage';
@@ -29,6 +29,9 @@ interface TotalsPanelProps {
   onSaveAndPrintSlip: () => void;
   onClearCart: () => void;
   onOpenShift?: () => void;
+  onHoldBill?: () => void;
+  onRecallBills?: () => void;
+  heldBillsCount?: number;
 }
 
 const INDIAN_STATES = [
@@ -58,6 +61,9 @@ export const TotalsPanel: React.FC<TotalsPanelProps> = ({
   onSaveAndPrintSlip,
   onClearCart,
   onOpenShift,
+  onHoldBill,
+  onRecallBills,
+  heldBillsCount = 0,
 }) => {
   const roundOffSign = totals.round_off_paise > 0 ? '+' : '';
 
@@ -325,6 +331,54 @@ export const TotalsPanel: React.FC<TotalsPanelProps> = ({
               Alt+Z
             </kbd>
           </button>
+        )}
+
+        {/* Hold & Recall Parked Bills (F6 / F7) */}
+        {(onHoldBill || onRecallBills) && (
+          <div className="grid grid-cols-2 gap-1.5">
+            {onHoldBill && (
+              <button
+                type="button"
+                onClick={onHoldBill}
+                disabled={itemCount === 0}
+                className={`py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-between transition-colors ${
+                  itemCount > 0
+                    ? 'bg-amber-950/40 hover:bg-amber-900/50 border border-amber-800/60 text-amber-300 cursor-pointer'
+                    : 'bg-slate-800/30 text-slate-500 border border-slate-800/50 cursor-not-allowed'
+                }`}
+                title="Suspend / Park active cart for later resumption (F6)"
+              >
+                <div className="flex items-center space-x-1">
+                  <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Hold Bill</span>
+                </div>
+                <kbd className="bg-slate-900 border border-slate-800 text-slate-400 text-[9px] px-1 rounded">
+                  F6
+                </kbd>
+              </button>
+            )}
+
+            {onRecallBills && (
+              <button
+                type="button"
+                onClick={onRecallBills}
+                className={`py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
+                  heldBillsCount > 0
+                    ? 'bg-purple-950/60 hover:bg-purple-900/60 border border-purple-700/70 text-purple-200'
+                    : 'bg-slate-800/50 hover:bg-slate-800 border border-slate-700/60 text-slate-300'
+                }`}
+                title="Recall suspended carts (F7)"
+              >
+                <div className="flex items-center space-x-1">
+                  <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Recall {heldBillsCount > 0 ? `(${heldBillsCount})` : ''}</span>
+                </div>
+                <kbd className="bg-slate-900 border border-slate-800 text-slate-400 text-[9px] px-1 rounded">
+                  F7
+                </kbd>
+              </button>
+            )}
+          </div>
         )}
 
         {/* Clear Cart Esc */}

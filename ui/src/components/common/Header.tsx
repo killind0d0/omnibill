@@ -8,6 +8,9 @@ import {
   ShoppingCart,
   Truck,
   Building2,
+  Tag,
+  PauseCircle,
+  PlayCircle,
 } from 'lucide-react';
 import { BusinessProfile } from '../../types/pos';
 
@@ -21,6 +24,10 @@ interface HeaderProps {
   onOpenPayment: () => void;
   onOpenSlip: () => void;
   cartCount: number;
+  onPriceCheck?: () => void;
+  onHoldBill?: () => void;
+  onRecallBills?: () => void;
+  heldBillsCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -33,6 +40,10 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenPayment,
   onOpenSlip,
   cartCount,
+  onPriceCheck,
+  onHoldBill,
+  onRecallBills,
+  heldBillsCount = 0,
 }) => {
   return (
     <header className="h-16 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between select-none shadow-md">
@@ -96,6 +107,65 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Navigation Shortcut Actions */}
       <div className="flex items-center space-x-2">
+        {/* Price & Stock Check (F5) */}
+        {onPriceCheck && (
+          <button
+            onClick={onPriceCheck}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/60 text-cyan-300 text-xs font-medium transition-colors cursor-pointer"
+            title="Price & Stock Check (F5)"
+          >
+            <Tag className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">Price Check</span>
+            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+              F5
+            </kbd>
+          </button>
+        )}
+
+        {/* Hold Bill (F6) */}
+        {onHoldBill && (
+          <button
+            onClick={onHoldBill}
+            disabled={cartCount === 0}
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              cartCount > 0
+                ? 'bg-amber-950/40 hover:bg-amber-900/50 border border-amber-800/60 text-amber-300 cursor-pointer'
+                : 'bg-slate-800/30 text-slate-500 border border-slate-800 cursor-not-allowed'
+            }`}
+            title="Hold / Suspend Current Bill (F6)"
+          >
+            <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Hold</span>
+            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+              F6
+            </kbd>
+          </button>
+        )}
+
+        {/* Recall Bills (F7) with Count Badge */}
+        {onRecallBills && (
+          <button
+            onClick={onRecallBills}
+            className={`relative flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              heldBillsCount > 0
+                ? 'bg-purple-950/60 hover:bg-purple-900/60 border border-purple-700/70 text-purple-200'
+                : 'bg-slate-800/50 hover:bg-slate-800 border border-slate-700/60 text-slate-300'
+            }`}
+            title="Recall Suspended / Parked Bills (F7)"
+          >
+            <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden sm:inline">Recall</span>
+            {heldBillsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-purple-500 text-white font-mono text-[10px] font-bold">
+                {heldBillsCount}
+              </span>
+            )}
+            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+              F7
+            </kbd>
+          </button>
+        )}
+
         {/* Business Date Pill */}
         <button
           onClick={onOpenDateModal}

@@ -68,19 +68,30 @@ interface VerticalSwitcherProps {
   currentVertical: VerticalMode;
   onSelectVertical: (mode: VerticalMode) => void;
   className?: string;
+  lockedVertical?: VerticalMode;
 }
 
 export const VerticalSwitcher: React.FC<VerticalSwitcherProps> = ({
   currentVertical,
   onSelectVertical,
   className = '',
+  lockedVertical,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false);
   const activeConfig = VERTICALS.find((v) => v.id === currentVertical) || VERTICALS[0];
   const IconComponent = activeConfig.icon;
 
-  // Keyboard shortcut listener: Alt+1, Alt+2, Alt+3, Alt+4
+  const availableVerticals = React.useMemo(() => {
+    if (lockedVertical) {
+      return VERTICALS.filter((v) => v.id === lockedVertical);
+    }
+    return VERTICALS;
+  }, [lockedVertical]);
+
+  // Keyboard shortcut listener: Alt+1, Alt+2, Alt+3, Alt+4 (only when NOT locked to a specific business)
   useEffect(() => {
+    if (lockedVertical) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey) {
         if (e.key === '1') {
@@ -101,13 +112,13 @@ export const VerticalSwitcher: React.FC<VerticalSwitcherProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onSelectVertical]);
+  }, [onSelectVertical, lockedVertical]);
 
   return (
     <div className={`relative flex items-center ${className}`}>
       {/* Desktop Segmented Tab Buttons (For Wide Screens) */}
       <div className="hidden lg:flex items-center bg-slate-900/90 p-1 rounded-xl border border-slate-800 shadow-inner">
-        {VERTICALS.map((v) => {
+        {availableVerticals.map((v) => {
           const ItemIcon = v.icon;
           const isActive = v.id === currentVertical;
           return (
@@ -150,7 +161,7 @@ export const VerticalSwitcher: React.FC<VerticalSwitcherProps> = ({
               <span>Select Industry Vertical</span>
               <Sparkles className="w-3 h-3 text-cyan-400" />
             </div>
-            {VERTICALS.map((v) => {
+            {availableVerticals.map((v) => {
               const ItemIcon = v.icon;
               const isActive = v.id === currentVertical;
               return (

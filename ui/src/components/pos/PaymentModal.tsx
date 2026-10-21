@@ -26,6 +26,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 }) => {
   const [mode, setMode] = useState<PaymentMode>('CASH');
   const [tenderedStr, setTenderedStr] = useState<string>('');
+  const [splitCashStr, setSplitCashStr] = useState<string>('');
+  const [splitUpiStr, setSplitUpiStr] = useState<string>('');
+  const [splitCardStr, setSplitCardStr] = useState<string>('');
   const [upiQrUrl, setUpiQrUrl] = useState<string>('');
   const tenderedInputRef = useRef<HTMLInputElement>(null);
 
@@ -34,6 +37,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setTenderedStr(totalRupees.toString());
+      setSplitCashStr('');
+      setSplitUpiStr('');
+      setSplitCardStr('');
       setTimeout(() => {
         tenderedInputRef.current?.select();
       }, 50);
@@ -51,7 +57,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const tenderedPaise = parseRupeesToPaise(tenderedStr);
   const changeDuePaise = Math.max(0, tenderedPaise - totalAmountPaise);
-  const isUnderTendered = mode === 'CASH' && tenderedPaise < totalAmountPaise;
+
+  // Split amounts
+  const splitCashPaise = parseRupeesToPaise(splitCashStr || '0');
+  const splitUpiPaise = parseRupeesToPaise(splitUpiStr || '0');
+  const splitCardPaise = parseRupeesToPaise(splitCardStr || '0');
+  const totalSplitPaise = splitCashPaise + splitUpiPaise + splitCardPaise;
+  const splitRemainingPaise = totalAmountPaise - totalSplitPaise;
+
+  const isUnderTendered =
+    mode === 'CASH'
+      ? tenderedPaise < totalAmountPaise
+      : mode === 'SPLIT'
+      ? totalSplitPaise !== totalAmountPaise
+      : false;
 
   const handleConfirm = () => {
     if (isUnderTendered) {
@@ -60,6 +79,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     const payment: PaymentDetails = {
       mode,
       amount_tendered_paise: mode === 'CASH' ? tenderedPaise : totalAmountPaise,
+      cash_tendered_paise: mode === 'SPLIT' ? splitCashPaise : mode === 'CASH' ? tenderedPaise : undefined,
+      upi_amount_paise: mode === 'SPLIT' ? splitUpiPaise : mode === 'UPI' ? totalAmountPaise : undefined,
+      card_amount_paise: mode === 'SPLIT' ? splitCardPaise : mode === 'CARD' ? totalAmountPaise : undefined,
       change_due_paise: mode === 'CASH' ? changeDuePaise : 0,
     };
     onCompletePayment(payment);
@@ -234,6 +256,98 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               </div>
             )}
             <div className="text-xs font-mono text-slate-400">{upiVpa}</div>
+          </div>
+        )}
+
+        {/* Split Tender Section */}
+        {mode === 'SPLIT' && (
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div className="text-xs text-slate-300 font-semibold flex items-center justify-between border-b border-slate-800 pb-2">
+              <span>Allocate Tender Across Payment Modes</span>
+              <span className="font-mono text-xs font-bold text-purple-400">
+                Total: {formatPaise(totalAmountPaise)}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <span className="w-20 text-xs text-slate-400 font-medium">Cash (₹):</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={splitCashStr}
+                  onChange={(e) => setSplitCashStr(e.target.value)}
+                  placeholder="0.00"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 font-mono text-sm text-white"
+                />
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <span className="w-20 text-xs text-slate-400 font-medium">UPI (₹):</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={splitUpiStr}
+                  onChange={(e) => setSplitUpiStr(e.target.value)}
+                  placeholder="0.00"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 font-mono text-sm text-white"
+                />
+                {splitRemainingPaise > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cur = parseRupeesToPaise(splitUpiStr || '0');
+                      setSplitUpiStr(((cur + splitRemainingPaise) / 100).toFixed(2));
+                    }}
+                    className="px-2 py-1 bg-blue-600/20 text-blue-300 border border-blue-500/30 rounded text-[11px] font-bold cursor-pointer"
+                  >
+                    + Fill ₹{(splitRemainingPaise / 100).toFixed(2)}
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <span className="w-20 text-xs text-slate-400 font-medium">Card (₹):</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={splitCardStr}
+                  onChange={(e) => setSplitCardStr(e.target.value)}
+                  placeholder="0.00"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 font-mono text-sm text-white"
+                />
+                {splitRemainingPaise > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cur = parseRupeesToPaise(splitCardStr || '0');
+                      setSplitCardStr(((cur + splitRemainingPaise) / 100).toFixed(2));
+                    }}
+                    className="px-2 py-1 bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded text-[11px] font-bold cursor-pointer"
+                  >
+                    + Fill ₹{(splitRemainingPaise / 100).toFixed(2)}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+              <span className="text-slate-400">Allocation Status:</span>
+              <span
+                className={`font-mono font-bold text-sm ${
+                  splitRemainingPaise === 0
+                    ? 'text-emerald-400'
+                    : splitRemainingPaise > 0
+                    ? 'text-amber-400'
+                    : 'text-rose-400'
+                }`}
+              >
+                {splitRemainingPaise === 0 ? '✓ 100% Balanced' : `₹${formatPaise(Math.abs(splitRemainingPaise))} ${splitRemainingPaise > 0 ? 'Remaining' : 'Excess'}`}
+              </span>
+            </div>
           </div>
         )}
 

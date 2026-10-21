@@ -5,6 +5,7 @@
 import {
   StudentEntity,
   ClassFeeRule,
+  MonthlyClassFeeRule,
   SchoolExpense,
   SchoolReceiptSettings,
   SchoolFeePaymentRecord,
@@ -193,6 +194,98 @@ export const INITIAL_CLASS_FEE_RULES: ClassFeeRule[] = [
 ];
 
 // ----------------------------------------------------------------------------
+// 2B. DEFAULT CLASS-WISE & MONTH-WISE FEE PRESETS (12-MONTH 2D MATRIX)
+// ----------------------------------------------------------------------------
+export const generateDefaultMonthlyRules = (): MonthlyClassFeeRule[] => {
+  const rules: MonthlyClassFeeRule[] = [];
+
+  for (const className of SCHOOL_CLASSES) {
+    const base = INITIAL_CLASS_FEE_RULES.find((r) => r.class_name === className) || {
+      class_name: className,
+      tuition_paise: 400000,
+      computer_lab_paise: 50000,
+      sports_activity_paise: 40000,
+      exam_paise: 40000,
+      transport_paise: 120000,
+      total_monthly_paise: 650000,
+    };
+
+    const isPrePrimary = ['Nursery', 'LKG', 'UKG'].includes(className);
+    const isPrimary = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'].includes(className);
+    const isMiddle = ['Class 6', 'Class 7', 'Class 8'].includes(className);
+    const isSecondary = ['Class 9', 'Class 10'].includes(className);
+    const isSenior = ['Class 11', 'Class 12'].includes(className);
+
+    for (const month of ACADEMIC_MONTHS) {
+      let annualCharge = 0;
+      let examFee = 0;
+      let sportsFee = base.sports_activity_paise;
+
+      // April: Annual Admission / Session Development Charge
+      if (month === 'Apr') {
+        if (isPrePrimary) annualCharge = 250000; // ₹2,500
+        else if (isPrimary) annualCharge = 350000; // ₹3,500
+        else if (isMiddle) annualCharge = 450000; // ₹4,500
+        else if (isSecondary) annualCharge = 550000; // ₹5,500
+        else if (isSenior) annualCharge = 650000; // ₹6,500
+      }
+
+      // September: Half-Yearly / Mid-Term Assessments
+      if (month === 'Sep') {
+        if (isPrePrimary) examFee = 30000; // ₹300
+        else if (isPrimary) examFee = 50000; // ₹500
+        else if (isMiddle) examFee = 60000; // ₹600
+        else if (isSecondary) examFee = 80000; // ₹800
+        else if (isSenior) examFee = 100000; // ₹1,000
+      }
+
+      // December: Winter Sports Day & Annual Fest
+      if (month === 'Dec') {
+        sportsFee += 40000; // +₹400 for annual sports event
+      }
+
+      // February: Pre-Board Assessments for Class 10 & 12
+      if (month === 'Feb' && (className === 'Class 10' || className === 'Class 12')) {
+        examFee = 120000; // ₹1,200
+      }
+
+      // March: Final Annual Board / Promotion Exams
+      if (month === 'Mar') {
+        if (isPrePrimary) examFee = 40000; // ₹400
+        else if (isPrimary) examFee = 60000; // ₹600
+        else if (isMiddle) examFee = 80000; // ₹800
+        else if (isSecondary) examFee = 120000; // ₹1,200
+        else if (isSenior) examFee = 150000; // ₹1,500
+      }
+
+      const total =
+        base.tuition_paise +
+        base.computer_lab_paise +
+        sportsFee +
+        examFee +
+        base.transport_paise +
+        annualCharge;
+
+      rules.push({
+        class_name: className,
+        month,
+        tuition_paise: base.tuition_paise,
+        computer_lab_paise: base.computer_lab_paise,
+        sports_activity_paise: sportsFee,
+        exam_paise: examFee,
+        transport_paise: base.transport_paise,
+        annual_charge_paise: annualCharge,
+        total_paise: total,
+      });
+    }
+  }
+
+  return rules;
+};
+
+export const INITIAL_MONTHLY_FEE_RULES: MonthlyClassFeeRule[] = generateDefaultMonthlyRules();
+
+// ----------------------------------------------------------------------------
 // 3. DEFAULT RECEIPT & WATERMARK / LOGO CUSTOMIZER SETTINGS
 // ----------------------------------------------------------------------------
 export const INITIAL_RECEIPT_SETTINGS: SchoolReceiptSettings = {
@@ -355,6 +448,7 @@ export const INITIAL_PAYMENT_RECORDS: SchoolFeePaymentRecord[] = [
 // ----------------------------------------------------------------------------
 const STORAGE_KEYS = {
   FEE_RULES: 'omnibill_school_fee_rules_v1',
+  MONTHLY_FEE_RULES: 'omnibill_school_monthly_fee_rules_v2',
   RECEIPT_SETTINGS: 'omnibill_school_receipt_settings_v1',
   EXPENSES: 'omnibill_school_expenses_v1',
   PAYMENTS: 'omnibill_school_fee_payments_v1',
@@ -385,7 +479,16 @@ export class SchoolDataService {
 
   // --- Students Master ---
   static getStudents(): StudentEntity[] {
-    return this.load<StudentEntity[]>(STORAGE_KEYS.STUDENTS, SEEDED_STUDENTS);
+    const loaded = this.load<StudentEntity[]>(STORAGE_KEYS.STUDENTS, SEEDED_STUDENTS);
+    // If user's stored list has fewer students than the full 21 seeded list, ensure all seeded students exist
+    if (loaded.length < SEEDED_STUDENTS.length) {
+      const existingIds = new Set(loaded.map((s) => s.id));
+      const missing = SEEDED_STUDENTS.filter((s) => !existingIds.has(s.id));
+      const merged = [...loaded, ...missing];
+      this.saveStudents(merged);
+      return merged;
+    }
+    return loaded;
   }
 
   static saveStudents(students: StudentEntity[]): void {
@@ -419,7 +522,7 @@ export class SchoolDataService {
     return student;
   }
 
-  // --- Fee Rules Presets ---
+  // --- Class-Wise General Summary Fee Rules ---
   static getFeeRules(): ClassFeeRule[] {
     return this.load<ClassFeeRule[]>(STORAGE_KEYS.FEE_RULES, INITIAL_CLASS_FEE_RULES);
   }
@@ -442,6 +545,131 @@ export class SchoolDataService {
       transport_paise: 120000,
       total_monthly_paise: 670000,
     };
+  }
+
+  // --- Class-Wise AND Month-Wise Fee Rules (Full 2D Matrix) ---
+  static getMonthlyFeeRules(): MonthlyClassFeeRule[] {
+    return this.load<MonthlyClassFeeRule[]>(
+      STORAGE_KEYS.MONTHLY_FEE_RULES,
+      INITIAL_MONTHLY_FEE_RULES
+    );
+  }
+
+  static saveMonthlyFeeRules(rules: MonthlyClassFeeRule[]): void {
+    this.save(STORAGE_KEYS.MONTHLY_FEE_RULES, rules);
+  }
+
+  static getRulesForClassAllMonths(className: string): MonthlyClassFeeRule[] {
+    const all = this.getMonthlyFeeRules();
+    const forClass = all.filter(
+      (r) => r.class_name.toLowerCase() === className.toLowerCase()
+    );
+    if (forClass.length === 12) return forClass;
+    // Fallback to initial defaults for this class
+    return INITIAL_MONTHLY_FEE_RULES.filter(
+      (r) => r.class_name.toLowerCase() === className.toLowerCase()
+    );
+  }
+
+  static getMonthlyRule(className: string, month: AcademicMonth): MonthlyClassFeeRule {
+    const all = this.getMonthlyFeeRules();
+    const matched = all.find(
+      (r) =>
+        r.class_name.toLowerCase() === className.toLowerCase() &&
+        r.month === month
+    );
+    if (matched) return matched;
+    return {
+      class_name: className,
+      month,
+      tuition_paise: 400000,
+      computer_lab_paise: 50000,
+      sports_activity_paise: 40000,
+      exam_paise: 40000,
+      transport_paise: 120000,
+      annual_charge_paise: month === 'Apr' ? 300000 : 0,
+      total_paise: month === 'Apr' ? 950000 : 650000,
+    };
+  }
+
+  static updateMonthlyRule(
+    className: string,
+    month: AcademicMonth,
+    updates: Partial<MonthlyClassFeeRule>
+  ): void {
+    const rules = this.getMonthlyFeeRules();
+    const idx = rules.findIndex(
+      (r) =>
+        r.class_name.toLowerCase() === className.toLowerCase() &&
+        r.month === month
+    );
+    if (idx >= 0) {
+      const existing = rules[idx];
+      const tuition = updates.tuition_paise !== undefined ? updates.tuition_paise : existing.tuition_paise;
+      const lab = updates.computer_lab_paise !== undefined ? updates.computer_lab_paise : existing.computer_lab_paise;
+      const sports = updates.sports_activity_paise !== undefined ? updates.sports_activity_paise : existing.sports_activity_paise;
+      const exam = updates.exam_paise !== undefined ? updates.exam_paise : existing.exam_paise;
+      const transport = updates.transport_paise !== undefined ? updates.transport_paise : existing.transport_paise;
+      const annual = updates.annual_charge_paise !== undefined ? updates.annual_charge_paise : existing.annual_charge_paise;
+      const total = tuition + lab + sports + exam + transport + annual;
+
+      rules[idx] = {
+        ...existing,
+        ...updates,
+        tuition_paise: tuition,
+        computer_lab_paise: lab,
+        sports_activity_paise: sports,
+        exam_paise: exam,
+        transport_paise: transport,
+        annual_charge_paise: annual,
+        total_paise: total,
+      };
+      this.saveMonthlyFeeRules(rules);
+    }
+  }
+
+  static copyMonthToAllMonths(className: string, sourceMonth: AcademicMonth): void {
+    const rules = this.getMonthlyFeeRules();
+    const source = rules.find(
+      (r) =>
+        r.class_name.toLowerCase() === className.toLowerCase() &&
+        r.month === sourceMonth
+    );
+    if (!source) return;
+
+    const updated = rules.map((r) => {
+      if (r.class_name.toLowerCase() === className.toLowerCase()) {
+        const total =
+          source.tuition_paise +
+          source.computer_lab_paise +
+          source.sports_activity_paise +
+          (r.month === 'Sep' || r.month === 'Mar' ? r.exam_paise : source.exam_paise) +
+          source.transport_paise +
+          (r.month === 'Apr' ? r.annual_charge_paise : 0);
+
+        return {
+          ...r,
+          tuition_paise: source.tuition_paise,
+          computer_lab_paise: source.computer_lab_paise,
+          sports_activity_paise: source.sports_activity_paise,
+          transport_paise: source.transport_paise,
+          total_paise: total,
+        };
+      }
+      return r;
+    });
+    this.saveMonthlyFeeRules(updated);
+  }
+
+  static resetClassFeeRules(className: string): void {
+    const allRules = this.getMonthlyFeeRules();
+    const defaults = INITIAL_MONTHLY_FEE_RULES.filter(
+      (r) => r.class_name.toLowerCase() === className.toLowerCase()
+    );
+    const remaining = allRules.filter(
+      (r) => r.class_name.toLowerCase() !== className.toLowerCase()
+    );
+    this.saveMonthlyFeeRules([...remaining, ...defaults]);
   }
 
   // --- Receipt Settings ---
@@ -612,7 +840,6 @@ export class SchoolDataService {
     overduePaise: number;
   }> {
     const students = this.getStudents();
-    const rules = this.getFeeRules();
     const defaulters: Array<{
       student: StudentEntity;
       unpaidMonths: string[];
@@ -627,11 +854,11 @@ export class SchoolDataService {
       const unpaid = evaluatedMonths.filter((m) => !paid.includes(m));
 
       if (unpaid.length > 0) {
-        const rule = rules.find(
-          (r) => r.class_name.toLowerCase() === student.class_name.toLowerCase()
-        );
-        const monthlyRate = student.monthly_fee_paise || rule?.total_monthly_paise || 500000;
-        const totalDue = unpaid.length * monthlyRate;
+        let totalDue = 0;
+        unpaid.forEach((m) => {
+          const rule = this.getMonthlyRule(student.class_name, m as AcademicMonth);
+          totalDue += rule.total_paise;
+        });
 
         defaulters.push({
           student,
@@ -643,4 +870,170 @@ export class SchoolDataService {
 
     return defaulters.sort((a, b) => b.overduePaise - a.overduePaise);
   }
+}
+
+// ----------------------------------------------------------------------------
+// 7. EXPORT & SHARE UTILITIES (CSV, WHATSAPP, PRINT HELPERS)
+// ----------------------------------------------------------------------------
+
+/**
+ * Trigger CSV download of Fee Collections Day Book
+ */
+export function exportFeeRecordsToCSV(records: SchoolFeePaymentRecord[]): void {
+  const headers = [
+    'Receipt No',
+    'Date',
+    'Time',
+    'Admission No',
+    'Student Name',
+    'Class',
+    'Section',
+    'Academic Year',
+    'Months Paid',
+    'Gross Fee (INR)',
+    'Concession Type',
+    'Concession (INR)',
+    'Net Amount Paid (INR)',
+    'Payment Mode',
+    'Txn Reference',
+    'Staff Cashier',
+    'Remarks',
+  ];
+
+  const rows = records.map((r) => [
+    `"${r.receipt_no}"`,
+    `"${r.date}"`,
+    `"${r.time}"`,
+    `"${r.admission_no}"`,
+    `"${r.student_name.replace(/"/g, '""')}"`,
+    `"${r.class_name}"`,
+    `"${r.section}"`,
+    `"${r.academic_year}"`,
+    `"${(r.months_paid || []).join('; ')}"`,
+    (r.subtotal_paise / 100).toFixed(2),
+    `"${r.concession_type}"`,
+    (r.concession_paise / 100).toFixed(2),
+    (r.net_amount_paise / 100).toFixed(2),
+    `"${r.payment_mode}"`,
+    `"${r.transaction_ref || ''}"`,
+    `"${r.staff_name || ''}"`,
+    `"${(r.remarks || '').replace(/"/g, '""')}"`,
+  ]);
+
+  const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `School_Fee_Collection_Report_${new Date().toISOString().split('T')[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Trigger CSV download of Fee Defaulters Register
+ */
+export function exportDefaultersToCSV(
+  defaulters: Array<{ student: StudentEntity; unpaidMonths: string[]; overduePaise: number }>
+): void {
+  const headers = [
+    'Admission No',
+    'Student Name',
+    'Class',
+    'Section',
+    'Roll No',
+    'Guardian Name',
+    'Guardian Phone',
+    'Unpaid Months Count',
+    'Unpaid Months List',
+    'Overdue Amount (INR)',
+    'Address',
+  ];
+
+  const rows = defaulters.map((d) => [
+    `"${d.student.admission_no}"`,
+    `"${d.student.full_name.replace(/"/g, '""')}"`,
+    `"${d.student.class_name}"`,
+    `"${d.student.section}"`,
+    `"${d.student.roll_no}"`,
+    `"${d.student.guardian_name.replace(/"/g, '""')}"`,
+    `"${d.student.guardian_phone || ''}"`,
+    d.unpaidMonths.length,
+    `"${d.unpaidMonths.join('; ')}"`,
+    (d.overduePaise / 100).toFixed(2),
+    `"${(d.student.address || '').replace(/"/g, '""')}"`,
+  ]);
+
+  const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `School_Fee_Defaulters_Report_${new Date().toISOString().split('T')[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Generate formatted WhatsApp summary text for collections
+ */
+export function generateCollectionWhatsAppLink(summary: {
+  totalPaise: number;
+  count: number;
+  cashPaise: number;
+  upiPaise: number;
+  bankPaise: number;
+  dateStr?: string;
+}): string {
+  const dateStr = summary.dateStr || new Date().toISOString().split('T')[0];
+  const text = `*ST. XAVIER HIGHER SECONDARY ACADEMY*
+*Fee Collection Day-Book Summary*
+📅 Date: ${dateStr}
+━━━━━━━━━━━━━━━━━━━
+🧾 Receipts Issued: *${summary.count}*
+💵 Cash Tendered: *₹${(summary.cashPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}*
+📱 UPI Collections: *₹${(summary.upiPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}*
+🏦 Bank / Cheque: *₹${(summary.bankPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}*
+━━━━━━━━━━━━━━━━━━━
+💰 *TOTAL NET COLLECTION: ₹${(summary.totalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}*
+━━━━━━━━━━━━━━━━━━━
+_Generated via OmniBill Enterprise School ERP_`;
+
+  return `https://wa.me/?text=${encodeURIComponent(text)}`;
+}
+
+/**
+ * Generate 1-Click WhatsApp Fee Due Reminder Link to Parent
+ */
+export function generateStudentFeeWhatsAppLink(
+  student: StudentEntity,
+  unpaidMonths: string[],
+  overduePaise: number
+): string {
+  const rawPhone = (student.guardian_phone || '').replace(/[^0-9]/g, '');
+  const cleanPhone = rawPhone.length === 10 ? `91${rawPhone}` : rawPhone;
+  const text = `*FEE DUE REMINDER NOTICE*
+*ST. XAVIER HIGHER SECONDARY ACADEMY*
+
+Dear Parent / Guardian (${student.guardian_name}),
+Greetings from St. Xavier Academy Accounts Desk.
+
+This is a reminder regarding the outstanding school fees for your ward:
+• *Student:* ${student.full_name}
+• *Adm No:* ${student.admission_no}
+• *Class:* ${student.class_name}-${student.section} (Roll: ${student.roll_no})
+• *Unpaid Months:* ${unpaidMonths.join(', ')} (${unpaidMonths.length} Months)
+• *Total Outstanding Due:* *₹${(overduePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}*
+
+Kindly settle the due amount at the School Accounts Counter or via online UPI / Net Banking at your earliest convenience to avoid late fee penalties.
+
+_Warm Regards,_
+_Accounts Department_
+_St. Xavier Higher Secondary Academy_`;
+
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
 }

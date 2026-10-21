@@ -24,24 +24,31 @@ import { formatPaise } from '../lib/tax';
 
 interface VerticalBillingAppProps {
   initialVertical?: VerticalMode;
+  lockedVertical?: VerticalMode;
+  hideHeader?: boolean;
   onNavigateHome?: () => void;
 }
 
 export const VerticalBillingApp: React.FC<VerticalBillingAppProps> = ({
   initialVertical = 'RETAIL',
+  lockedVertical,
+  hideHeader = false,
   onNavigateHome,
 }) => {
-  const [currentVertical, setCurrentVertical] = useState<VerticalMode>(initialVertical);
+  const effectiveVertical = lockedVertical || initialVertical;
+  const [currentVertical, setCurrentVertical] = useState<VerticalMode>(effectiveVertical);
   const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
   const [historyList, setHistoryList] = useState<PostedTransactionReceipt[]>([]);
   const [selectedReceipt, setSelectedReceipt] = useState<PostedTransactionReceipt | null>(null);
 
-  // Sync when initialVertical changes
+  // Sync when initialVertical or lockedVertical changes
   React.useEffect(() => {
-    if (initialVertical) {
+    if (lockedVertical) {
+      setCurrentVertical(lockedVertical);
+    } else if (initialVertical) {
       setCurrentVertical(initialVertical);
     }
-  }, [initialVertical]);
+  }, [initialVertical, lockedVertical]);
 
   const activeConfig = VERTICALS.find((v) => v.id === currentVertical) || VERTICALS[0];
 
@@ -51,84 +58,106 @@ export const VerticalBillingApp: React.FC<VerticalBillingAppProps> = ({
     setShowHistoryModal(true);
   };
 
+  const showTopBar = !hideHeader && !lockedVertical;
+
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      {/* TOP NAVIGATION BAR WITH MULTI-VERTICAL SWITCHER */}
-      <header className="h-14 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between z-30 select-none shadow-sm">
-        {/* Brand & Home Navigation */}
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-md">
-            <Store className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="font-extrabold text-sm tracking-tight text-white">OmniBill ERP</span>
-              <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded text-[10px] font-mono">
-                v2.0
-              </span>
+    <div className="flex flex-col h-full w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
+      {/* TOP NAVIGATION BAR WITH MULTI-VERTICAL SWITCHER (Hidden when locked/embedded) */}
+      {showTopBar && (
+        <header className="h-14 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between z-30 select-none shadow-sm">
+          {/* Brand & Home Navigation */}
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-md">
+              <Store className="w-4 h-4 text-white" />
             </div>
-            <p className="text-[10px] text-slate-400 hidden sm:block">Integrated Enterprise Billing Engine</p>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="font-extrabold text-sm tracking-tight text-white">OmniBill ERP</span>
+                <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded text-[10px] font-mono">
+                  v2.0
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400 hidden sm:block">Integrated Enterprise Billing Engine</p>
+            </div>
           </div>
-        </div>
 
-        {/* MULTI-VERTICAL SWITCHER (CENTER STAGE) */}
-        <div className="flex-1 flex justify-center px-4">
-          <VerticalSwitcher
-            currentVertical={currentVertical}
-            onSelectVertical={setCurrentVertical}
-          />
-        </div>
-
-        {/* Action Controls & Audit History */}
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={openHistory}
-            type="button"
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700/80 transition"
-            title="View Posted Transactions Ledger"
-          >
-            <History className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden md:inline">Ledger Log</span>
-          </button>
-
-          <div className="hidden xl:flex items-center space-x-2 pl-2 border-l border-slate-800 text-xs text-slate-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>SQLite Connected</span>
+          {/* MULTI-VERTICAL SWITCHER (CENTER STAGE - Isolated when locked) */}
+          <div className="flex-1 flex justify-center px-4">
+            <VerticalSwitcher
+              currentVertical={currentVertical}
+              onSelectVertical={(mode) => {
+                if (!lockedVertical) {
+                  setCurrentVertical(mode);
+                }
+              }}
+              lockedVertical={lockedVertical}
+            />
           </div>
-        </div>
-      </header>
 
-      {/* ACTIVE VERTICAL WORKSPACE - Preserves Cart State Across Verticals */}
+          {/* Action Controls & Audit History */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={openHistory}
+              type="button"
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700/80 transition cursor-pointer"
+              title="View Posted Transactions Ledger"
+            >
+              <History className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden md:inline">Ledger Log</span>
+            </button>
+
+            <div className="hidden xl:flex items-center space-x-2 pl-2 border-l border-slate-800 text-xs text-slate-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>SQLite Connected</span>
+            </div>
+          </div>
+        </header>
+      )}
+
+      {/* ACTIVE VERTICAL WORKSPACE - Strictly Isolated per Business Type */}
       <main className="flex-1 overflow-hidden relative">
-        <div className={`h-full w-full ${currentVertical === 'RETAIL' ? '' : 'hidden'}`}>
-          <RetailPOS />
-        </div>
-        <div className={`h-full w-full ${currentVertical === 'WHOLESALE' ? '' : 'hidden'}`}>
-          <WholesaleBilling />
-        </div>
-        <div className={`h-full w-full ${currentVertical === 'SCHOOL' ? '' : 'hidden'}`}>
-          <SchoolBilling />
-        </div>
-        <div className={`h-full w-full ${currentVertical === 'HOSPITAL' ? '' : 'hidden'}`}>
-          <HospitalBilling />
-        </div>
+        {lockedVertical ? (
+          <div className="h-full w-full">
+            {lockedVertical === 'RETAIL' && <RetailPOS />}
+            {lockedVertical === 'WHOLESALE' && <WholesaleBilling />}
+            {lockedVertical === 'SCHOOL' && <SchoolBilling />}
+            {lockedVertical === 'HOSPITAL' && <HospitalBilling />}
+          </div>
+        ) : (
+          <>
+            <div className={`h-full w-full ${currentVertical === 'RETAIL' ? '' : 'hidden'}`}>
+              <RetailPOS />
+            </div>
+            <div className={`h-full w-full ${currentVertical === 'WHOLESALE' ? '' : 'hidden'}`}>
+              <WholesaleBilling />
+            </div>
+            <div className={`h-full w-full ${currentVertical === 'SCHOOL' ? '' : 'hidden'}`}>
+              <SchoolBilling />
+            </div>
+            <div className={`h-full w-full ${currentVertical === 'HOSPITAL' ? '' : 'hidden'}`}>
+              <HospitalBilling />
+            </div>
+          </>
+        )}
       </main>
 
-      {/* FOOTER SHORTCUT HELPER STRIP */}
-      <footer className="h-7 bg-slate-900/90 border-t border-slate-800 px-4 flex items-center justify-between text-[11px] text-slate-400">
-        <div className="flex items-center space-x-4">
-          <span className="font-semibold text-slate-300">Active Vertical: {activeConfig.name}</span>
-          <span className="hidden md:inline text-slate-500">•</span>
-          <span className="hidden md:inline text-slate-400">{activeConfig.tagline}</span>
-        </div>
+      {/* FOOTER SHORTCUT HELPER STRIP (Only when not locked/embedded) */}
+      {showTopBar && (
+        <footer className="h-7 bg-slate-900/90 border-t border-slate-800 px-4 flex items-center justify-between text-[11px] text-slate-400">
+          <div className="flex items-center space-x-4">
+            <span className="font-semibold text-slate-300">Active Vertical: {activeConfig.name}</span>
+            <span className="hidden md:inline text-slate-500">•</span>
+            <span className="hidden md:inline text-slate-400">{activeConfig.tagline}</span>
+          </div>
 
-        <div className="hidden sm:flex items-center space-x-3 font-mono text-[10px]">
-          <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+1</kbd> Retail</span>
-          <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+2</kbd> Wholesale</span>
-          <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+3</kbd> School</span>
-          <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+4</kbd> Hospital</span>
-        </div>
-      </footer>
+          <div className="hidden sm:flex items-center space-x-3 font-mono text-[10px]">
+            <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+1</kbd> Retail</span>
+            <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+2</kbd> Wholesale</span>
+            <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+3</kbd> School</span>
+            <span><kbd className="bg-slate-800 px-1 py-0.5 rounded text-slate-300">Alt+4</kbd> Hospital</span>
+          </div>
+        </footer>
+      )}
 
       {/* RECENT TRANSACTION LEDGER LOG MODAL */}
       {showHistoryModal && (

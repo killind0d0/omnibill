@@ -35,7 +35,20 @@ import { posSound } from '../../lib/sound';
 import { shiftManager } from '../../lib/shiftManager';
 import { ShiftSettlementModal } from './ShiftSettlementModal';
 import { CatalogImporterModal } from '../importer/CatalogImporterModal';
+import { HeldBillsModal, HeldBill } from './HeldBillsModal';
+import { PriceCheckModal } from './PriceCheckModal';
 import { Sparkles, Upload } from 'lucide-react';
+
+const HELD_BILLS_STORAGE_KEY = 'omnibill_held_bills';
+
+const getInitialHeldBills = (): HeldBill[] => {
+  try {
+    const raw = localStorage.getItem(HELD_BILLS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+};
 
 export const LightningPOS: React.FC = () => {
   // Application Modes
@@ -74,6 +87,17 @@ export const LightningPOS: React.FC = () => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [isImporterOpen, setIsImporterOpen] = useState(false);
+  const [isHeldBillsOpen, setIsHeldBillsOpen] = useState(false);
+  const [isPriceCheckOpen, setIsPriceCheckOpen] = useState(false);
+
+  // Held / Suspended Bills State
+  const [heldBills, setHeldBills] = useState<HeldBill[]>(getInitialHeldBills);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HELD_BILLS_STORAGE_KEY, JSON.stringify(heldBills));
+    } catch {}
+  }, [heldBills]);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -176,7 +200,9 @@ export const LightningPOS: React.FC = () => {
       !isReceiptOpen &&
       !isHelpOpen &&
       !isDateModalOpen &&
-      !isSearchOpen,
+      !isSearchOpen &&
+      !isHeldBillsOpen &&
+      !isPriceCheckOpen,
     debounceMs: 300,
     onScan: (barcode) => {
       setNumpadValue('');
@@ -395,6 +421,72 @@ export const LightningPOS: React.FC = () => {
     refreshProducts();
   }, [cartItems.length, buildCompletedSale, refreshProducts, showToast]);
 
+  // Hold / Suspend Bill (F6)
+  const handleHoldBill = useCallback(() => {
+    if (cartItems.length === 0) {
+      showToast('Cart is empty. Add items before holding.');
+      return;
+    }
+
+    const newHeld: HeldBill = {
+      id: 'held_' + Date.now(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      priceMode,
+      items: [...cartItems],
+      subtotalPaise: taxComputation.totals.total_amount_paise,
+    };
+
+    setHeldBills((prev) => [newHeld, ...prev]);
+    setCartItems([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setNumpadValue('');
+    posSound.playItemAdd();
+    showToast(`Bill held for ${newHeld.customerName || 'Walk-in'} (${newHeld.items.length} items) - Press F7 to recall`);
+  }, [cartItems, customerName, customerPhone, priceMode, taxComputation.totals.total_amount_paise, showToast]);
+
+  // Recall Suspended Bill (F7)
+  const handleRecallBill = useCallback(
+    (bill: HeldBill) => {
+      if (cartItems.length > 0) {
+        // Automatically hold active cart so nothing is lost
+        const activeParked: HeldBill = {
+          id: 'held_' + Date.now(),
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          customerName: customerName.trim(),
+          customerPhone: customerPhone.trim(),
+          priceMode,
+          items: [...cartItems],
+          subtotalPaise: taxComputation.totals.total_amount_paise,
+        };
+        setHeldBills((prev) => [activeParked, ...prev.filter((b) => b.id !== bill.id)]);
+        showToast(`Current cart parked; recalled bill (${bill.items.length} items)`);
+      } else {
+        setHeldBills((prev) => prev.filter((b) => b.id !== bill.id));
+        showToast(`Recalled bill (${bill.items.length} items)`);
+      }
+
+      setCartItems(bill.items);
+      setPriceMode(bill.priceMode);
+      setCustomerName(bill.customerName);
+      setCustomerPhone(bill.customerPhone);
+      setIsHeldBillsOpen(false);
+      posSound.playSuccess();
+    },
+    [cartItems, customerName, customerPhone, priceMode, taxComputation.totals.total_amount_paise, showToast]
+  );
+
+  // Discard Held Bill
+  const handleDiscardHeldBill = useCallback(
+    (billId: string) => {
+      setHeldBills((prev) => prev.filter((b) => b.id !== billId));
+      showToast('Held bill discarded');
+    },
+    [showToast]
+  );
+
   const handleFinishSale = () => {
     setCartItems([]);
     setCustomerPhone('');
@@ -437,6 +529,27 @@ export const LightningPOS: React.FC = () => {
         return;
       }
 
+      // F5: Fast Barcode & Price Check Modal
+      if (e.key === 'F5') {
+        e.preventDefault();
+        setIsPriceCheckOpen(true);
+        return;
+      }
+
+      // F6: Hold / Suspend Active Bill
+      if (e.key === 'F6') {
+        e.preventDefault();
+        handleHoldBill();
+        return;
+      }
+
+      // F7: Recall Suspended / Parked Bills
+      if (e.key === 'F7') {
+        e.preventDefault();
+        setIsHeldBillsOpen(true);
+        return;
+      }
+
       // F8: Sales Invoicing Mode
       if (e.key === 'F8') {
         e.preventDefault();
@@ -469,7 +582,17 @@ export const LightningPOS: React.FC = () => {
 
       // Escape: Cancel / Clear cart
       if (e.key === 'Escape') {
-        if (!isHelpOpen && !isDateModalOpen && !isPaymentOpen && !isReceiptOpen && !isSearchOpen) {
+        if (
+          !isHelpOpen &&
+          !isDateModalOpen &&
+          !isPaymentOpen &&
+          !isReceiptOpen &&
+          !isSearchOpen &&
+          !isHeldBillsOpen &&
+          !isPriceCheckOpen &&
+          !isShiftModalOpen &&
+          !isImporterOpen
+        ) {
           if (cartItems.length > 0) {
             e.preventDefault();
             handleClearCart();
@@ -488,8 +611,13 @@ export const LightningPOS: React.FC = () => {
     isPaymentOpen,
     isReceiptOpen,
     isSearchOpen,
+    isHeldBillsOpen,
+    isPriceCheckOpen,
+    isShiftModalOpen,
+    isImporterOpen,
     handleSaveAndPrintSlip,
     handleClearCart,
+    handleHoldBill,
   ]);
 
   return (
@@ -505,6 +633,10 @@ export const LightningPOS: React.FC = () => {
         onOpenPayment={() => setIsPaymentOpen(true)}
         onOpenSlip={handleSaveAndPrintSlip}
         cartCount={cartItems.length}
+        onPriceCheck={() => setIsPriceCheckOpen(true)}
+        onHoldBill={handleHoldBill}
+        onRecallBills={() => setIsHeldBillsOpen(true)}
+        heldBillsCount={heldBills.length}
       />
 
       {/* Main Workspace Body */}
@@ -596,6 +728,9 @@ export const LightningPOS: React.FC = () => {
             onSaveAndPrintSlip={handleSaveAndPrintSlip}
             onClearCart={handleClearCart}
             onOpenShift={() => setIsShiftModalOpen(true)}
+            onHoldBill={handleHoldBill}
+            onRecallBills={() => setIsHeldBillsOpen(true)}
+            heldBillsCount={heldBills.length}
           />
         </div>
       )}
@@ -654,6 +789,21 @@ export const LightningPOS: React.FC = () => {
         isOpen={isImporterOpen}
         onClose={() => setIsImporterOpen(false)}
         onImportSuccess={() => refreshProducts()}
+      />
+
+      <PriceCheckModal
+        isOpen={isPriceCheckOpen}
+        onClose={() => setIsPriceCheckOpen(false)}
+        products={products}
+        onAddToCart={(prod) => addProductToCart(prod, 1000)}
+      />
+
+      <HeldBillsModal
+        isOpen={isHeldBillsOpen}
+        onClose={() => setIsHeldBillsOpen(false)}
+        heldBills={heldBills}
+        onRecallBill={handleRecallBill}
+        onDiscardBill={handleDiscardHeldBill}
       />
     </div>
   );

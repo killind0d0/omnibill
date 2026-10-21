@@ -57,6 +57,7 @@ import {
   PaymentDetails,
   PostedTransactionReceipt,
   ClassFeeRule,
+  MonthlyClassFeeRule,
   SchoolExpense,
   SchoolReceiptSettings,
   SchoolFeePaymentRecord,
@@ -69,6 +70,10 @@ import {
   SCHOOL_CLASSES,
   SchoolDataService,
   AcademicMonth,
+  exportFeeRecordsToCSV,
+  exportDefaultersToCSV,
+  generateCollectionWhatsAppLink,
+  generateStudentFeeWhatsAppLink,
 } from './schoolData';
 
 export type SchoolTab =
@@ -142,15 +147,20 @@ export const SchoolBilling: React.FC = () => {
   const [students, setStudents] = useState<StudentEntity[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [feeRules, setFeeRules] = useState<ClassFeeRule[]>([]);
+  const [monthlyFeeRules, setMonthlyFeeRules] = useState<MonthlyClassFeeRule[]>([]);
+  const [selectedRuleClass, setSelectedRuleClass] = useState<string>('Class 10');
   const [receiptSettings, setReceiptSettings] = useState<SchoolReceiptSettings>(
     SchoolDataService.getReceiptSettings()
   );
   const [expenses, setExpenses] = useState<SchoolExpense[]>([]);
   const [paymentRecords, setPaymentRecords] = useState<SchoolFeePaymentRecord[]>([]);
 
-  // Search & Master Key Selection
+  // Two-Way Smart Auto-Fill & Search State
   const [masterSearchQuery, setMasterSearchQuery] = useState('');
+  const [nameSearchQuery, setNameSearchQuery] = useState('');
   const [classFilter, setClassFilter] = useState<string>('ALL');
+  const [sectionFilter, setSectionFilter] = useState<string>('ALL');
+  const [rollFilter, setRollFilter] = useState<string>('');
 
   // Academic Term & Monthly Billing Grid
   const [academicYear, setAcademicYear] = useState<string>('2026-2027');
@@ -158,12 +168,22 @@ export const SchoolBilling: React.FC = () => {
   const [billingMode, setBillingMode] = useState<'MONTHLY' | 'TERM'>('MONTHLY');
   const [academicTerm, setAcademicTerm] = useState<string>('Term 3 (Oct-Dec)');
 
-  // Dynamic Fee Line Items in Cart
+  // Dynamic & Fully Editable Fee Line Items in Cart
   const [cart, setCart] = useState<VerticalCartLine[]>([]);
   const [concessionType, setConcessionType] = useState<string>('NONE');
   const [concessionPaise, setConcessionPaise] = useState<number>(0);
   const [customDiscountPaise, setCustomDiscountPaise] = useState<number>(0);
   const [lateFeePaise, setLateFeePaise] = useState<number>(0);
+
+  // Custom Line Item Insertion ("+ Add Custom Fee Head")
+  const [showAddCustomHead, setShowAddCustomHead] = useState(false);
+  const [customHeadName, setCustomHeadName] = useState('');
+  const [customHeadAmountInr, setCustomHeadAmountInr] = useState('');
+
+  // Report Date/Class/Staff Filter State
+  const [reportDateRange, setReportDateRange] = useState<'ALL' | 'TODAY' | 'WEEK' | 'MONTH'>('ALL');
+  const [reportClassFilter, setReportClassFilter] = useState<string>('ALL');
+  const [reportStaffFilter, setReportStaffFilter] = useState<string>('ALL');
 
   // Payment Instrument & Staff
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('UPI');
@@ -200,14 +220,25 @@ export const SchoolBilling: React.FC = () => {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Synchronize two-way inputs when a student is selected
+  const syncStudentInputs = (student: StudentEntity) => {
+    setSelectedStudentId(student.id);
+    setMasterSearchQuery(student.admission_no);
+    setNameSearchQuery(student.full_name);
+    setClassFilter(student.class_name);
+    setSectionFilter(student.section);
+    setRollFilter(student.roll_no);
+  };
+
   // Initial Load
   const refreshAllData = () => {
     const stds = SchoolDataService.getStudents();
     setStudents(stds);
     if (stds.length > 0 && !selectedStudentId) {
-      setSelectedStudentId(stds[0].id);
+      syncStudentInputs(stds[0]);
     }
     setFeeRules(SchoolDataService.getFeeRules());
+    setMonthlyFeeRules(SchoolDataService.getMonthlyFeeRules());
     setReceiptSettings(SchoolDataService.getReceiptSettings());
     setExpenses(SchoolDataService.getExpenses());
     setPaymentRecords(SchoolDataService.getFeePayments());
@@ -222,18 +253,75 @@ export const SchoolBilling: React.FC = () => {
     return students.find((s) => s.id === selectedStudentId) || students[0] || null;
   }, [students, selectedStudentId]);
 
-  // Current Student's Class Fee Rule Preset
+  // Two-Way Smart Match: Handlers
+  const handleMasterKeyChange = (val: string) => {
+    setMasterSearchQuery(val);
+    const query = val.trim().toLowerCase();
+    if (!query) return;
+    const match = students.find((s) => s.admission_no.toLowerCase() === query);
+    if (match) {
+      syncStudentInputs(match);
+      showToast(`Auto-matched Admission No: ${match.admission_no} (${match.full_name})`);
+    }
+  };
+
+  const handleNameOrPhoneSearch = (val: string) => {
+    setNameSearchQuery(val);
+    const query = val.trim().toLowerCase();
+    if (!query) return;
+    const match = students.find(
+      (s) =>
+        s.full_name.toLowerCase().includes(query) ||
+        (s.guardian_phone && s.guardian_phone.includes(query)) ||
+        s.roll_no.toLowerCase() === query
+    );
+    if (match && match.id !== selectedStudentId) {
+      syncStudentInputs(match);
+    }
+  };
+
+  const handleClassSectionRollSelect = (cls: string, sec: string, roll: string) => {
+    setClassFilter(cls);
+    setSectionFilter(sec);
+    setRollFilter(roll);
+
+    const match = students.find(
+      (s) =>
+        (cls === 'ALL' || s.class_name.toLowerCase() === cls.toLowerCase()) &&
+        (sec === 'ALL' || s.section.toLowerCase() === sec.toLowerCase()) &&
+        (roll.trim() === '' || s.roll_no.toLowerCase() === roll.trim().toLowerCase() || s.roll_no.endsWith(roll.trim()))
+    );
+
+    if (match) {
+      syncStudentInputs(match);
+      showToast(`Auto-caught Admission No: ${match.admission_no}`);
+    }
+  };
+
+  // Current Student's Class Fee Rule Summary
   const currentClassRule = useMemo<ClassFeeRule>(() => {
     if (!selectedStudent) return SchoolDataService.getRuleForClass('Class 10');
     return SchoolDataService.getRuleForClass(selectedStudent.class_name);
   }, [selectedStudent, feeRules]);
 
-  // Sync Fee Lines when Student or Selected Months change
+  // Sync Fee Lines when Student or Selected Months change (using Class-wise & Month-wise rules!)
   useEffect(() => {
-    if (!selectedStudent || !currentClassRule) return;
+    if (!selectedStudent) return;
 
     const monthsCount = selectedMonths.length > 0 ? selectedMonths.length : 1;
     const monthsLabel = selectedMonths.join(', ');
+
+    // Fetch month-wise rules for each selected month
+    const monthRules = selectedMonths.map((m) =>
+      SchoolDataService.getMonthlyRule(selectedStudent.class_name, m)
+    );
+
+    const totalTuition = monthRules.reduce((acc, r) => acc + r.tuition_paise, 0);
+    const totalLab = monthRules.reduce((acc, r) => acc + r.computer_lab_paise, 0);
+    const totalSports = monthRules.reduce((acc, r) => acc + r.sports_activity_paise, 0);
+    const totalExam = monthRules.reduce((acc, r) => acc + r.exam_paise, 0);
+    const totalTransport = monthRules.reduce((acc, r) => acc + r.transport_paise, 0);
+    const totalAnnual = monthRules.reduce((acc, r) => acc + r.annual_charge_paise, 0);
 
     const lines: VerticalCartLine[] = [
       {
@@ -245,109 +333,341 @@ export const SchoolBilling: React.FC = () => {
         unit: 'mo',
         tax_rate_bps: 0,
         quantity_milli: monthsCount * 1000,
-        unit_price_paise: currentClassRule.tuition_paise,
+        unit_price_paise: Math.round(totalTuition / monthsCount),
         discount_paise: 0,
-        gross_paise: currentClassRule.tuition_paise * monthsCount,
-        taxable_paise: currentClassRule.tuition_paise * monthsCount,
+        gross_paise: totalTuition,
+        taxable_paise: totalTuition,
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
-        line_total_paise: currentClassRule.tuition_paise * monthsCount,
+        line_total_paise: totalTuition,
         fee_head_category: 'Tuition',
         term_name: monthsLabel,
       },
     ];
 
-    if (currentClassRule.computer_lab_paise > 0) {
+    if (totalAnnual > 0) {
+      lines.push({
+        id: `fee_ann_${selectedStudent.id}`,
+        resource_id: 'res_ann',
+        sku: 'FEE-ANN',
+        name: `Annual Session / Admission Development Charge (${monthsLabel})`,
+        hsn_sac: '9992',
+        unit: 'session',
+        tax_rate_bps: 0,
+        quantity_milli: 1000,
+        unit_price_paise: totalAnnual,
+        discount_paise: 0,
+        gross_paise: totalAnnual,
+        taxable_paise: totalAnnual,
+        cgst_paise: 0,
+        sgst_paise: 0,
+        igst_paise: 0,
+        line_total_paise: totalAnnual,
+        fee_head_category: 'Admission',
+      });
+    }
+
+    if (totalLab > 0) {
       lines.push({
         id: `fee_lab_${selectedStudent.id}`,
         resource_id: 'res_lab',
         sku: 'FEE-LAB',
-        name: `Computer & Science Lab Fee (${monthsCount} mo)`,
+        name: `Computer & Science Lab Assessment (${monthsCount} mo: ${monthsLabel})`,
         hsn_sac: '9992',
         unit: 'mo',
         tax_rate_bps: 0,
         quantity_milli: monthsCount * 1000,
-        unit_price_paise: currentClassRule.computer_lab_paise,
+        unit_price_paise: Math.round(totalLab / monthsCount),
         discount_paise: 0,
-        gross_paise: currentClassRule.computer_lab_paise * monthsCount,
-        taxable_paise: currentClassRule.computer_lab_paise * monthsCount,
+        gross_paise: totalLab,
+        taxable_paise: totalLab,
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
-        line_total_paise: currentClassRule.computer_lab_paise * monthsCount,
+        line_total_paise: totalLab,
         fee_head_category: 'Lab',
       });
     }
 
-    if (currentClassRule.sports_activity_paise > 0) {
+    if (totalSports > 0) {
       lines.push({
         id: `fee_spt_${selectedStudent.id}`,
         resource_id: 'res_spt',
         sku: 'FEE-SPT',
-        name: `Sports, Cultural & Activity Fee (${monthsCount} mo)`,
+        name: `Sports, Cultural & Winter Activities (${monthsCount} mo: ${monthsLabel})`,
         hsn_sac: '9992',
         unit: 'mo',
         tax_rate_bps: 0,
         quantity_milli: monthsCount * 1000,
-        unit_price_paise: currentClassRule.sports_activity_paise,
+        unit_price_paise: Math.round(totalSports / monthsCount),
         discount_paise: 0,
-        gross_paise: currentClassRule.sports_activity_paise * monthsCount,
-        taxable_paise: currentClassRule.sports_activity_paise * monthsCount,
+        gross_paise: totalSports,
+        taxable_paise: totalSports,
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
-        line_total_paise: currentClassRule.sports_activity_paise * monthsCount,
+        line_total_paise: totalSports,
         fee_head_category: 'Sports',
       });
     }
 
-    if (currentClassRule.exam_paise > 0) {
+    if (totalExam > 0) {
       lines.push({
         id: `fee_exm_${selectedStudent.id}`,
         resource_id: 'res_exm',
         sku: 'FEE-EXM',
-        name: `Periodic & Term Examination Assessment`,
+        name: `Periodic Assessment & Board Exam Evaluation (${monthsLabel})`,
         hsn_sac: '9992',
         unit: 'term',
         tax_rate_bps: 0,
         quantity_milli: 1000,
-        unit_price_paise: currentClassRule.exam_paise,
+        unit_price_paise: totalExam,
         discount_paise: 0,
-        gross_paise: currentClassRule.exam_paise,
-        taxable_paise: currentClassRule.exam_paise,
+        gross_paise: totalExam,
+        taxable_paise: totalExam,
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
-        line_total_paise: currentClassRule.exam_paise,
+        line_total_paise: totalExam,
         fee_head_category: 'Examination',
       });
     }
 
-    if (currentClassRule.transport_paise > 0) {
+    if (totalTransport > 0) {
       lines.push({
         id: `fee_bus_${selectedStudent.id}`,
         resource_id: 'res_bus',
         sku: 'FEE-BUS',
-        name: `School Bus / Transport Route Facility (${monthsCount} mo)`,
+        name: `School Bus / Transport Route Facility (${monthsCount} mo: ${monthsLabel})`,
         hsn_sac: '9992',
         unit: 'mo',
         tax_rate_bps: 0,
         quantity_milli: monthsCount * 1000,
-        unit_price_paise: currentClassRule.transport_paise,
+        unit_price_paise: Math.round(totalTransport / monthsCount),
         discount_paise: 0,
-        gross_paise: currentClassRule.transport_paise * monthsCount,
-        taxable_paise: currentClassRule.transport_paise * monthsCount,
+        gross_paise: totalTransport,
+        taxable_paise: totalTransport,
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
-        line_total_paise: currentClassRule.transport_paise * monthsCount,
+        line_total_paise: totalTransport,
         fee_head_category: 'Transport',
       });
     }
 
     setCart(lines);
-  }, [selectedStudent, selectedMonths, currentClassRule]);
+  }, [selectedStudent, selectedMonths, monthlyFeeRules]);
+
+  // Inline Line Item Editing Handlers (Fully Editable Bill)
+  const handleUpdateLineName = (lineId: string, newName: string) => {
+    setCart((prev) =>
+      prev.map((l) => (l.id === lineId ? { ...l, name: newName } : l))
+    );
+  };
+
+  const handleUpdateLineAmount = (lineId: string, amountInr: number) => {
+    const amountPaise = Math.max(0, Math.round(amountInr * 100));
+    setCart((prev) =>
+      prev.map((l) =>
+        l.id === lineId
+          ? {
+              ...l,
+              unit_price_paise: amountPaise,
+              gross_paise: amountPaise,
+              taxable_paise: amountPaise,
+              line_total_paise: amountPaise,
+            }
+          : l
+      )
+    );
+  };
+
+  const handleDeleteLine = (lineId: string) => {
+    setCart((prev) => prev.filter((l) => l.id !== lineId));
+    showToast('Fee line item removed from bill.');
+  };
+
+  const handleAddCustomHead = () => {
+    if (!customHeadName.trim()) {
+      showToast('Please enter a description for the fee head.');
+      return;
+    }
+    const amountPaise = Math.max(0, Math.round(Number(customHeadAmountInr || 0) * 100));
+    const newLine: VerticalCartLine = {
+      id: `fee_cust_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+      resource_id: 'res_cust',
+      sku: 'FEE-CUSTOM',
+      name: customHeadName.trim(),
+      hsn_sac: '9992',
+      unit: 'item',
+      tax_rate_bps: 0,
+      quantity_milli: 1000,
+      unit_price_paise: amountPaise,
+      discount_paise: 0,
+      gross_paise: amountPaise,
+      taxable_paise: amountPaise,
+      cgst_paise: 0,
+      sgst_paise: 0,
+      igst_paise: 0,
+      line_total_paise: amountPaise,
+    };
+    setCart((prev) => [...prev, newLine]);
+    setCustomHeadName('');
+    setCustomHeadAmountInr('');
+    setShowAddCustomHead(false);
+    showToast(`Added custom fee head: "${newLine.name}"`);
+  };
+
+  // Month-Wise Fee Rules Matrix Handlers (Tab 3: FEE_RULES)
+  const rulesForSelectedClass = useMemo<MonthlyClassFeeRule[]>(() => {
+    return monthlyFeeRules.filter(
+      (r) => r.class_name.toLowerCase() === selectedRuleClass.toLowerCase()
+    );
+  }, [monthlyFeeRules, selectedRuleClass]);
+
+  const handleUpdateClassMonthRule = (
+    month: AcademicMonth,
+    field: keyof MonthlyClassFeeRule,
+    valuePaise: number
+  ) => {
+    setMonthlyFeeRules((prev) =>
+      prev.map((r) => {
+        if (
+          r.class_name.toLowerCase() === selectedRuleClass.toLowerCase() &&
+          r.month === month
+        ) {
+          const updated = { ...r, [field]: valuePaise };
+          updated.total_paise =
+            updated.tuition_paise +
+            updated.computer_lab_paise +
+            updated.sports_activity_paise +
+            updated.exam_paise +
+            updated.transport_paise +
+            updated.annual_charge_paise;
+          return updated;
+        }
+        return r;
+      })
+    );
+  };
+
+  const handleCopyMonthToAll = (sourceMonth: AcademicMonth) => {
+    const source = rulesForSelectedClass.find((r) => r.month === sourceMonth);
+    if (!source) return;
+
+    setMonthlyFeeRules((prev) =>
+      prev.map((r) => {
+        if (r.class_name.toLowerCase() === selectedRuleClass.toLowerCase()) {
+          const isApr = r.month === 'Apr';
+          const isExamMonth = r.month === 'Sep' || r.month === 'Feb' || r.month === 'Mar';
+          const annualCharge = isApr ? r.annual_charge_paise || source.annual_charge_paise : 0;
+          const examFee = isExamMonth ? r.exam_paise || source.exam_paise : 0;
+
+          const total =
+            source.tuition_paise +
+            source.computer_lab_paise +
+            source.sports_activity_paise +
+            examFee +
+            source.transport_paise +
+            annualCharge;
+
+          return {
+            ...r,
+            tuition_paise: source.tuition_paise,
+            computer_lab_paise: source.computer_lab_paise,
+            sports_activity_paise: source.sports_activity_paise,
+            transport_paise: source.transport_paise,
+            exam_paise: examFee,
+            annual_charge_paise: annualCharge,
+            total_paise: total,
+          };
+        }
+        return r;
+      })
+    );
+    showToast(`Copied ${sourceMonth} rates to all 12 months of ${selectedRuleClass}!`);
+  };
+
+  const handleResetClassRules = () => {
+    SchoolDataService.resetClassFeeRules(selectedRuleClass);
+    setMonthlyFeeRules(SchoolDataService.getMonthlyFeeRules());
+    showToast(`Reset ${selectedRuleClass} fee rules to standard curriculum defaults!`);
+  };
+
+  const handleSaveMonthlyFeeRules = () => {
+    SchoolDataService.saveMonthlyFeeRules(monthlyFeeRules);
+    showToast(`All Class-Wise & Month-Wise Fee Rules saved successfully!`);
+  };
+
+  // Analytics Metrics
+  const defaultersList = useMemo(() => SchoolDataService.getDefaulters(6), [students, monthlyFeeRules]);
+
+  // Filtered payment records for Reports Tab
+  const filteredPaymentRecords = useMemo(() => {
+    let list = paymentRecords;
+    if (reportClassFilter !== 'ALL') {
+      list = list.filter((r) => r.class_name.toLowerCase() === reportClassFilter.toLowerCase());
+    }
+    if (reportStaffFilter !== 'ALL') {
+      list = list.filter((r) => (r.staff_name || '').toLowerCase() === reportStaffFilter.toLowerCase());
+    }
+    if (reportDateRange === 'TODAY') {
+      const today = new Date().toISOString().split('T')[0];
+      list = list.filter((r) => r.date === today);
+    } else if (reportDateRange === 'WEEK') {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+      list = list.filter((r) => r.date >= sevenDaysAgo);
+    } else if (reportDateRange === 'MONTH') {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+      list = list.filter((r) => r.date >= thirtyDaysAgo);
+    }
+    return list;
+  }, [paymentRecords, reportClassFilter, reportStaffFilter, reportDateRange]);
+
+  // Report Actions (Print, WhatsApp, CSV, Clipboard)
+  const handlePrintReport = () => {
+    window.print();
+  };
+
+  const handleShareWhatsAppReport = () => {
+    const summary = {
+      totalPaise: filteredPaymentRecords.reduce((acc, r) => acc + r.net_amount_paise, 0),
+      count: filteredPaymentRecords.length,
+      cashPaise: filteredPaymentRecords.filter((r) => r.payment_mode === 'CASH').reduce((acc, r) => acc + r.net_amount_paise, 0),
+      upiPaise: filteredPaymentRecords.filter((r) => r.payment_mode === 'UPI').reduce((acc, r) => acc + r.net_amount_paise, 0),
+      bankPaise: filteredPaymentRecords.filter((r) => r.payment_mode !== 'CASH' && r.payment_mode !== 'UPI').reduce((acc, r) => acc + r.net_amount_paise, 0),
+      dateStr: new Date().toISOString().split('T')[0],
+    };
+    const link = generateCollectionWhatsAppLink(summary);
+    window.open(link, '_blank');
+  };
+
+  const handleExportCSVReport = () => {
+    exportFeeRecordsToCSV(filteredPaymentRecords);
+    showToast('Fee collection CSV report downloaded successfully!');
+  };
+
+  const handleCopySummaryReport = () => {
+    const totalPaise = filteredPaymentRecords.reduce((acc, r) => acc + r.net_amount_paise, 0);
+    const text = `ST. XAVIER ACADEMY - FEE COLLECTION SUMMARY (${new Date().toLocaleDateString()})
+Total Receipts: ${filteredPaymentRecords.length}
+Total Net Collected: ${formatPaise(totalPaise)}
+Cash: ${formatPaise(filteredPaymentRecords.filter((r) => r.payment_mode === 'CASH').reduce((acc, r) => acc + r.net_amount_paise, 0))}
+UPI: ${formatPaise(filteredPaymentRecords.filter((r) => r.payment_mode === 'UPI').reduce((acc, r) => acc + r.net_amount_paise, 0))}
+Bank: ${formatPaise(filteredPaymentRecords.filter((r) => r.payment_mode !== 'CASH' && r.payment_mode !== 'UPI').reduce((acc, r) => acc + r.net_amount_paise, 0))}`;
+    navigator.clipboard.writeText(text);
+    showToast('Summary copied to clipboard!');
+  };
+
+  const handlePrintDefaulters = () => {
+    window.print();
+  };
+
+  const handleExportDefaultersCSV = () => {
+    exportDefaultersToCSV(defaultersList);
+    showToast('Defaulters register CSV downloaded successfully!');
+  };
 
   // Filtered Students by Master Key, Name, or Roll No
   const filteredStudents = useMemo(() => {
@@ -613,7 +933,6 @@ ${receiptSettings.receipt_terms}`;
   };
 
   // Analytics Metrics
-  const defaultersList = useMemo(() => SchoolDataService.getDefaulters(6), [students, feeRules]);
   const dateWiseCollections = useMemo(() => SchoolDataService.getDateWiseCollection(), [paymentRecords]);
   const classWiseCollections = useMemo(() => SchoolDataService.getClassWiseCollection(), [paymentRecords, students]);
   const staffWiseCollections = useMemo(() => SchoolDataService.getStaffWiseCollection(), [paymentRecords]);
@@ -747,51 +1066,108 @@ ${receiptSettings.receipt_terms}`;
                 </button>
               </div>
 
-              {/* Master Search Bar (Admission No, Name, Roll No) */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="sm:col-span-2 relative">
-                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    placeholder="Search Master Key: Admission No (e.g. ADM-2020-044), Name, Roll No..."
-                    value={masterSearchQuery}
-                    onChange={(e) => setMasterSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-amber-200 font-mono placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
+              {/* Two-Way Smart Auto-Fill & Search Hub */}
+              <div className="space-y-2.5">
+                {/* 3 Interconnected Search & Auto-Catch Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs">
+                  {/* 1. Master Key (Admission No) */}
+                  <div className="sm:col-span-4 relative">
+                    <label className="text-[10px] text-amber-400 font-bold block mb-0.5 uppercase tracking-wider flex items-center space-x-1">
+                      <Hash className="w-3 h-3 text-amber-400" />
+                      <span>Master Key (Adm No):</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. ADM-2020-044"
+                      value={masterSearchQuery}
+                      onChange={(e) => handleMasterKeyChange(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-amber-500/60 rounded-xl text-xs text-amber-300 font-mono font-bold placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  {/* 2. Student Name / Phone Search */}
+                  <div className="sm:col-span-4 relative">
+                    <label className="text-[10px] text-slate-400 font-bold block mb-0.5 uppercase tracking-wider flex items-center space-x-1">
+                      <Search className="w-3 h-3 text-slate-400" />
+                      <span>Student Name / Phone:</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Type name (e.g. Rohan, Aarav)..."
+                      value={nameSearchQuery}
+                      onChange={(e) => handleNameOrPhoneSearch(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  {/* 3. Class + Section + Roll Auto-Catch */}
+                  <div className="sm:col-span-4">
+                    <label className="text-[10px] text-cyan-400 font-bold block mb-0.5 uppercase tracking-wider flex items-center space-x-1">
+                      <Sparkles className="w-3 h-3 text-cyan-400" />
+                      <span>Class / Sec / Roll Auto-Catch:</span>
+                    </label>
+                    <div className="grid grid-cols-3 gap-1">
+                      <select
+                        value={classFilter}
+                        onChange={(e) => handleClassSectionRollSelect(e.target.value, sectionFilter, rollFilter)}
+                        className="px-1.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-[11px] text-slate-200"
+                      >
+                        <option value="ALL">All Cls</option>
+                        {SCHOOL_CLASSES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        value={sectionFilter}
+                        onChange={(e) => handleClassSectionRollSelect(classFilter, e.target.value, rollFilter)}
+                        className="px-1.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-[11px] text-slate-200"
+                      >
+                        <option value="ALL">Sec: All</option>
+                        <option value="A">Sec A</option>
+                        <option value="B">Sec B</option>
+                        <option value="C">Sec C</option>
+                      </select>
+
+                      <input
+                        type="text"
+                        placeholder="Roll..."
+                        value={rollFilter}
+                        onChange={(e) => handleClassSectionRollSelect(classFilter, sectionFilter, e.target.value)}
+                        className="px-1.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-[11px] text-slate-200 font-mono text-center"
+                      />
+                    </div>
+                  </div>
                 </div>
 
+                {/* All-in-One Master Student Roster Dropdown */}
                 <div>
+                  <div className="flex items-center justify-between mb-0.5 text-[10px]">
+                    <span className="text-slate-400 font-semibold uppercase">
+                      Select From Master Student Directory ({filteredStudents.length} Students):
+                    </span>
+                    <span className="text-amber-400 font-mono">
+                      Active Adm No: {selectedStudent?.admission_no}
+                    </span>
+                  </div>
                   <select
-                    value={classFilter}
-                    onChange={(e) => setClassFilter(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-200 font-medium focus:outline-none focus:border-amber-500"
+                    value={selectedStudentId}
+                    onChange={(e) => {
+                      const match = students.find((s) => s.id === e.target.value);
+                      if (match) syncStudentInputs(match);
+                    }}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-amber-200 font-mono font-medium focus:outline-none focus:border-amber-500 cursor-pointer"
                   >
-                    <option value="ALL">All Classes (Nursery - 12)</option>
-                    {SCHOOL_CLASSES.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
+                    {filteredStudents.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        [{s.admission_no}] {s.full_name} — {s.class_name}-{s.section} (Roll: {s.roll_no}) — Dues:{' '}
+                        {formatPaise(s.dues_balance_paise)}
                       </option>
                     ))}
                   </select>
                 </div>
-              </div>
-
-              {/* Student Dropdown / Direct Match */}
-              <div>
-                <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
-                  Matched Enrolled Students ({filteredStudents.length}):
-                </label>
-                <select
-                  value={selectedStudentId}
-                  onChange={(e) => setSelectedStudentId(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-100 font-medium focus:outline-none focus:border-amber-500"
-                >
-                  {filteredStudents.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      [{s.admission_no}] {s.full_name} • {s.class_name}-{s.section} (Roll: {s.roll_no})
-                    </option>
-                  ))}
-                </select>
               </div>
 
               {/* Comprehensive Student Details Card */}
@@ -1003,49 +1379,144 @@ ${receiptSettings.receipt_terms}`;
 
           {/* Fee Heads Breakdown Table & Payment Settlement Panel */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Left: Fee Heads Breakdown */}
+            {/* Left: Fee Heads Breakdown (100% Fully Editable) */}
             <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2">
                 <div className="flex items-center space-x-2">
                   <BookOpen className="w-4 h-4 text-amber-400" />
                   <h3 className="text-xs font-bold uppercase text-slate-200">
                     Fee Heads Breakdown for Selected Months ({selectedMonths.join(', ')})
                   </h3>
                 </div>
-                <span className="text-xs font-mono font-bold text-amber-400">
-                  {selectedMonths.length} Months Selected
-                </span>
+                <div className="flex items-center space-x-2">
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-mono text-[10px] font-bold border border-emerald-500/30">
+                    ✏️ Editable Final Bill
+                  </span>
+                  <span className="text-xs font-mono font-bold text-amber-400">
+                    {selectedMonths.length} Months Selected
+                  </span>
+                </div>
               </div>
 
+              {/* Editable Lines Table */}
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase font-bold">
-                      <th className="pb-2">Particulars / Head</th>
-                      <th className="pb-2 text-center">Basis</th>
-                      <th className="pb-2 text-right">Monthly Rate</th>
-                      <th className="pb-2 text-right">Months</th>
-                      <th className="pb-2 text-right">Total Amount</th>
+                      <th className="pb-2">Particulars / Head Description (Click to Edit)</th>
+                      <th className="pb-2 text-center w-16">Basis</th>
+                      <th className="pb-2 text-right w-32">Amount (₹) (Editable)</th>
+                      <th className="pb-2 text-center w-12">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono text-slate-200">
                     {cart.map((line) => (
                       <tr key={line.id} className="hover:bg-slate-800/30">
-                        <td className="py-2 pr-2 font-sans font-medium text-white">{line.name}</td>
-                        <td className="py-2 text-center text-slate-400 text-[11px]">{line.unit}</td>
-                        <td className="py-2 text-right text-slate-300">
-                          {formatPaise(line.unit_price_paise)}
+                        {/* Editable Name */}
+                        <td className="py-1.5 pr-2">
+                          <input
+                            type="text"
+                            value={line.name}
+                            onChange={(e) => handleUpdateLineName(line.id, e.target.value)}
+                            className="w-full px-2 py-1 bg-slate-950 border border-slate-700/80 rounded font-sans font-medium text-white text-xs focus:outline-none focus:border-amber-500"
+                            title="Edit fee description"
+                          />
                         </td>
-                        <td className="py-2 text-right text-amber-400 font-bold">
-                          {line.unit === 'term' ? 1 : selectedMonths.length}
+
+                        {/* Basis */}
+                        <td className="py-1.5 text-center text-slate-400 text-[11px]">
+                          {line.unit}
                         </td>
-                        <td className="py-2 text-right font-bold text-white">
-                          {formatPaise(line.line_total_paise)}
+
+                        {/* Editable Amount */}
+                        <td className="py-1.5 text-right">
+                          <div className="flex items-center justify-end space-x-1">
+                            <span className="text-slate-500 text-xs font-mono">₹</span>
+                            <input
+                              type="number"
+                              step="1"
+                              value={line.line_total_paise / 100}
+                              onChange={(e) => handleUpdateLineAmount(line.id, Number(e.target.value))}
+                              className="w-24 px-2 py-1 bg-slate-950 border border-slate-700/80 rounded font-bold font-mono text-amber-300 text-xs text-right focus:outline-none focus:border-amber-500"
+                              title="Edit fee amount in ₹"
+                            />
+                          </div>
+                        </td>
+
+                        {/* Delete Line */}
+                        <td className="py-1.5 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteLine(line.id)}
+                            className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition cursor-pointer"
+                            title="Remove this fee head"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Add Custom Fee Head Button & Form */}
+              <div className="pt-2 border-t border-slate-800/80">
+                {showAddCustomHead ? (
+                  <div className="bg-slate-950 p-2.5 rounded-xl border border-amber-500/40 space-y-2">
+                    <div className="text-[11px] font-bold text-amber-300">Add Custom Fee Head to Bill:</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs">
+                      <div className="sm:col-span-7">
+                        <input
+                          type="text"
+                          placeholder="e.g. Uniform Set, Late Fine, Library Lost Book, ID Card..."
+                          value={customHeadName}
+                          onChange={(e) => setCustomHeadName(e.target.value)}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                        />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <input
+                          type="number"
+                          placeholder="Amount in ₹"
+                          value={customHeadAmountInr}
+                          onChange={(e) => setCustomHeadAmountInr(e.target.value)}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-amber-300 font-mono text-right"
+                        />
+                      </div>
+                      <div className="sm:col-span-2 flex items-center space-x-1">
+                        <button
+                          type="button"
+                          onClick={handleAddCustomHead}
+                          className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-bold text-xs cursor-pointer"
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowAddCustomHead(false)}
+                          className="p-1.5 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddCustomHead(true)}
+                      className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer self-start"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Add Custom Fee Head (Late Fine, Uniform, ID Card, etc.)</span>
+                    </button>
+                    <span className="text-[11px] text-slate-500 italic">
+                      All descriptions and amounts are editable before printing
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1185,9 +1656,26 @@ ${receiptSettings.receipt_terms}`;
                   Overdue Fee Defaulters Roster & Direct WhatsApp Notice
                 </h3>
               </div>
-              <span className="text-xs text-slate-400">
-                Click green WhatsApp icon to dispatch instant reminder to guardian
-              </span>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handlePrintDefaulters}
+                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1 shadow transition cursor-pointer"
+                  title="Print Defaulters Report"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Defaulters</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportDefaultersCSV}
+                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1 shadow transition cursor-pointer"
+                  title="Export Defaulters CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1268,187 +1756,260 @@ ${receiptSettings.receipt_terms}`;
       )}
 
       {/* ---------------------------------------------------------------------
-          TAB 3: CLASS FEE RULES PRESET CONFIGURATOR
+          TAB 3: CLASS-WISE & MONTH-WISE FEE RULES PRESET CONFIGURATOR
           --------------------------------------------------------------------- */}
       {activeTab === 'FEE_RULES' && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          {/* Header & Controls */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">
             <div>
               <h3 className="text-sm font-bold text-slate-100 flex items-center space-x-2">
                 <Sliders className="w-4 h-4 text-amber-400" />
-                <span>Class-Wise Fee Rules Preset Configurator</span>
+                <span>Class-Wise & Month-Wise Fee Preset Engine (12-Month Matrix)</span>
               </h3>
               <p className="text-[11px] text-slate-400">
-                Configure standard monthly fee heads per class. Updating presets immediately applies to all new fee calculations.
+                Every class has distinct fees across each of the 12 academic months (Apr to Mar). E.g. Annual charges in April, Exam assessments in September/March, and Winter fest in December.
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                SchoolDataService.saveFeeRules(feeRules);
-                showToast('Class Fee Presets saved successfully!');
-              }}
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/30 transition cursor-pointer self-start sm:self-auto"
-            >
-              Save & Apply Fee Rules
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Select Active Class */}
+              <div className="flex items-center space-x-2 bg-slate-950 px-2.5 py-1 rounded-xl border border-amber-500/40">
+                <span className="text-[11px] text-slate-400 font-bold uppercase">Class:</span>
+                <select
+                  value={selectedRuleClass}
+                  onChange={(e) => setSelectedRuleClass(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-amber-300 focus:outline-none cursor-pointer"
+                >
+                  {SCHOOL_CLASSES.map((c) => (
+                    <option key={c} value={c} className="bg-slate-900 text-white">
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleCopyMonthToAll('Apr')}
+                className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 rounded-xl text-xs font-semibold transition cursor-pointer"
+                title="Copy April base rates to all 12 months for this class"
+              >
+                Copy Apr Base to All
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetClassRules}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition cursor-pointer"
+              >
+                Reset to Defaults
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveMonthlyFeeRules}
+                className="px-4 py-1.5 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/30 transition cursor-pointer"
+              >
+                Save All Fee Rules
+              </button>
+            </div>
           </div>
 
+          {/* 12-Month Table for Selected Class */}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase font-bold">
-                  <th className="pb-2">Class Name</th>
+                  <th className="pb-2 w-28">Month</th>
                   <th className="pb-2 text-right">Tuition Fee (₹)</th>
-                  <th className="pb-2 text-right">Computer Lab (₹)</th>
+                  <th className="pb-2 text-right">Computer/Lab (₹)</th>
                   <th className="pb-2 text-right">Sports/Activity (₹)</th>
                   <th className="pb-2 text-right">Exam Prep (₹)</th>
-                  <th className="pb-2 text-right">Bus / Transport (₹)</th>
-                  <th className="pb-2 text-right text-amber-400">Total Monthly (₹)</th>
+                  <th className="pb-2 text-right">Bus Transport (₹)</th>
+                  <th className="pb-2 text-right">Annual/Term Charge (₹)</th>
+                  <th className="pb-2 text-right text-amber-400 font-black">Month Total (₹)</th>
+                  <th className="pb-2 text-center w-24">Copy Month</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                {feeRules.map((rule, idx) => (
-                  <tr key={rule.class_name} className="hover:bg-slate-800/30">
-                    <td className="py-2.5 font-sans font-bold text-white">{rule.class_name}</td>
-                    <td className="py-2.5 text-right">
-                      <input
-                        type="number"
-                        value={rule.tuition_paise / 100}
-                        onChange={(e) => {
-                          const val = Number(e.target.value) * 100;
-                          setFeeRules((prev) =>
-                            prev.map((r, i) =>
-                              i === idx
-                                ? {
-                                    ...r,
-                                    tuition_paise: val,
-                                    total_monthly_paise:
-                                      val +
-                                      r.computer_lab_paise +
-                                      r.sports_activity_paise +
-                                      r.exam_paise +
-                                      r.transport_paise,
-                                  }
-                                : r
+                {rulesForSelectedClass.map((rule) => {
+                  const isApr = rule.month === 'Apr';
+                  const isSep = rule.month === 'Sep';
+                  const isDec = rule.month === 'Dec';
+                  const isFeb = rule.month === 'Feb';
+                  const isMar = rule.month === 'Mar';
+
+                  return (
+                    <tr key={rule.month} className="hover:bg-slate-800/30">
+                      {/* Month Column with Badge */}
+                      <td className="py-2.5 font-sans">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="font-bold text-amber-300 text-xs uppercase">{rule.month}</span>
+                          {isApr && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              Annual
+                            </span>
+                          )}
+                          {(isSep || isFeb || isMar) && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                              Exam
+                            </span>
+                          )}
+                          {isDec && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                              Fest
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Tuition */}
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          value={rule.tuition_paise / 100}
+                          onChange={(e) =>
+                            handleUpdateClassMonthRule(
+                              rule.month as AcademicMonth,
+                              'tuition_paise',
+                              Number(e.target.value) * 100
                             )
-                          );
-                        }}
-                        className="w-24 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white"
-                      />
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <input
-                        type="number"
-                        value={rule.computer_lab_paise / 100}
-                        onChange={(e) => {
-                          const val = Number(e.target.value) * 100;
-                          setFeeRules((prev) =>
-                            prev.map((r, i) =>
-                              i === idx
-                                ? {
-                                    ...r,
-                                    computer_lab_paise: val,
-                                    total_monthly_paise:
-                                      r.tuition_paise +
-                                      val +
-                                      r.sports_activity_paise +
-                                      r.exam_paise +
-                                      r.transport_paise,
-                                  }
-                                : r
+                          }
+                          className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white font-mono text-xs focus:border-amber-500"
+                        />
+                      </td>
+
+                      {/* Computer & Lab */}
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          value={rule.computer_lab_paise / 100}
+                          onChange={(e) =>
+                            handleUpdateClassMonthRule(
+                              rule.month as AcademicMonth,
+                              'computer_lab_paise',
+                              Number(e.target.value) * 100
                             )
-                          );
-                        }}
-                        className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white"
-                      />
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <input
-                        type="number"
-                        value={rule.sports_activity_paise / 100}
-                        onChange={(e) => {
-                          const val = Number(e.target.value) * 100;
-                          setFeeRules((prev) =>
-                            prev.map((r, i) =>
-                              i === idx
-                                ? {
-                                    ...r,
-                                    sports_activity_paise: val,
-                                    total_monthly_paise:
-                                      r.tuition_paise +
-                                      r.computer_lab_paise +
-                                      val +
-                                      r.exam_paise +
-                                      r.transport_paise,
-                                  }
-                                : r
+                          }
+                          className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white font-mono text-xs focus:border-amber-500"
+                        />
+                      </td>
+
+                      {/* Sports & Activity */}
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          value={rule.sports_activity_paise / 100}
+                          onChange={(e) =>
+                            handleUpdateClassMonthRule(
+                              rule.month as AcademicMonth,
+                              'sports_activity_paise',
+                              Number(e.target.value) * 100
                             )
-                          );
-                        }}
-                        className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white"
-                      />
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <input
-                        type="number"
-                        value={rule.exam_paise / 100}
-                        onChange={(e) => {
-                          const val = Number(e.target.value) * 100;
-                          setFeeRules((prev) =>
-                            prev.map((r, i) =>
-                              i === idx
-                                ? {
-                                    ...r,
-                                    exam_paise: val,
-                                    total_monthly_paise:
-                                      r.tuition_paise +
-                                      r.computer_lab_paise +
-                                      r.sports_activity_paise +
-                                      val +
-                                      r.transport_paise,
-                                  }
-                                : r
+                          }
+                          className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white font-mono text-xs focus:border-amber-500"
+                        />
+                      </td>
+
+                      {/* Exam Prep */}
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          value={rule.exam_paise / 100}
+                          onChange={(e) =>
+                            handleUpdateClassMonthRule(
+                              rule.month as AcademicMonth,
+                              'exam_paise',
+                              Number(e.target.value) * 100
                             )
-                          );
-                        }}
-                        className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white"
-                      />
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <input
-                        type="number"
-                        value={rule.transport_paise / 100}
-                        onChange={(e) => {
-                          const val = Number(e.target.value) * 100;
-                          setFeeRules((prev) =>
-                            prev.map((r, i) =>
-                              i === idx
-                                ? {
-                                    ...r,
-                                    transport_paise: val,
-                                    total_monthly_paise:
-                                      r.tuition_paise +
-                                      r.computer_lab_paise +
-                                      r.sports_activity_paise +
-                                      r.exam_paise +
-                                      val,
-                                  }
-                                : r
+                          }
+                          className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white font-mono text-xs focus:border-amber-500"
+                        />
+                      </td>
+
+                      {/* Bus Transport */}
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          value={rule.transport_paise / 100}
+                          onChange={(e) =>
+                            handleUpdateClassMonthRule(
+                              rule.month as AcademicMonth,
+                              'transport_paise',
+                              Number(e.target.value) * 100
                             )
-                          );
-                        }}
-                        className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white"
-                      />
-                    </td>
-                    <td className="py-2.5 text-right font-black text-amber-400">
-                      {formatPaise(rule.total_monthly_paise)}
-                    </td>
-                  </tr>
-                ))}
+                          }
+                          className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-white font-mono text-xs focus:border-amber-500"
+                        />
+                      </td>
+
+                      {/* Annual / Term Charge */}
+                      <td className="py-2 text-right">
+                        <input
+                          type="number"
+                          value={rule.annual_charge_paise / 100}
+                          onChange={(e) =>
+                            handleUpdateClassMonthRule(
+                              rule.month as AcademicMonth,
+                              'annual_charge_paise',
+                              Number(e.target.value) * 100
+                            )
+                          }
+                          className="w-20 px-2 py-1 bg-slate-950 border border-slate-700 rounded text-right text-amber-300 font-mono text-xs focus:border-amber-500"
+                        />
+                      </td>
+
+                      {/* Month Total */}
+                      <td className="py-2 text-right font-black text-amber-400">
+                        {formatPaise(rule.total_paise)}
+                      </td>
+
+                      {/* Copy Action */}
+                      <td className="py-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMonthToAll(rule.month as AcademicMonth)}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-[10px] font-sans transition cursor-pointer"
+                          title={`Copy ${rule.month} values to all months`}
+                        >
+                          Copy All
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+
+          {/* Bottom Summary Bar for Active Class */}
+          <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center space-x-2">
+              <span className="text-slate-400">Active Curriculum:</span>
+              <span className="font-bold text-white">{selectedRuleClass} (Full 12 Academic Months)</span>
+            </div>
+
+            <div className="flex items-center space-x-4">
+              <div>
+                <span className="text-slate-400 block text-[10px]">Monthly Average:</span>
+                <span className="font-mono font-bold text-slate-200">
+                  {formatPaise(
+                    Math.round(
+                      rulesForSelectedClass.reduce((acc, r) => acc + r.total_paise, 0) /
+                        (rulesForSelectedClass.length || 1)
+                    )
+                  )}
+                  /mo
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px]">Total Annual Fees:</span>
+                <span className="font-mono font-black text-amber-400 text-sm">
+                  {formatPaise(rulesForSelectedClass.reduce((acc, r) => acc + r.total_paise, 0))}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1548,6 +2109,111 @@ ${receiptSettings.receipt_terms}`;
           --------------------------------------------------------------------- */}
       {activeTab === 'REPORTS' && (
         <div className="space-y-4">
+          {/* Action Bar & Filter Bar */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                  <BarChart3 className="w-4 h-4 text-amber-400" />
+                  <span>Fee Collection Audit, Day-Book & Financial Reports</span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Comprehensive audit ledger with direct print, WhatsApp dispatch, and CSV export.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintReport}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow transition cursor-pointer"
+                  title="Print Report"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Report</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleShareWhatsAppReport}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow transition cursor-pointer"
+                  title="Share Collection Summary on WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>Share WhatsApp</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportCSVReport}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow transition cursor-pointer"
+                  title="Download CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopySummaryReport}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                  title="Copy Summary to Clipboard"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Copy Summary</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Controls Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-0.5">Date Range Filter:</label>
+                <select
+                  value={reportDateRange}
+                  onChange={(e) => setReportDateRange(e.target.value as any)}
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-slate-200"
+                >
+                  <option value="ALL">All Recorded Dates</option>
+                  <option value="TODAY">Today Only</option>
+                  <option value="WEEK">Last 7 Days</option>
+                  <option value="MONTH">Last 30 Days</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-0.5">Class Filter:</label>
+                <select
+                  value={reportClassFilter}
+                  onChange={(e) => setReportClassFilter(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-slate-200"
+                >
+                  <option value="ALL">All Classes</option>
+                  {SCHOOL_CLASSES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-0.5">Cashier / Staff Filter:</label>
+                <select
+                  value={reportStaffFilter}
+                  onChange={(e) => setReportStaffFilter(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-slate-200"
+                >
+                  <option value="ALL">All Staff</option>
+                  <option value="Mrs. Sunita Rao (Counter 1)">Mrs. Sunita Rao (Counter 1)</option>
+                  <option value="Mr. Amit Shah (Counter 2)">Mr. Amit Shah (Counter 2)</option>
+                  <option value="Admin Office Head">Admin Office Head</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* 1. Date-Wise Report */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
@@ -1626,7 +2292,7 @@ ${receiptSettings.receipt_terms}`;
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <h3 className="text-xs font-bold uppercase text-slate-200">
-                Complete Fee Collection Register Day Book ({paymentRecords.length} records)
+                Complete Fee Collection Register Day Book ({filteredPaymentRecords.length} records)
               </h3>
             </div>
 
@@ -1646,7 +2312,7 @@ ${receiptSettings.receipt_terms}`;
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                  {paymentRecords.map((r) => (
+                  {filteredPaymentRecords.map((r) => (
                     <tr key={r.id} className="hover:bg-slate-800/30">
                       <td className="py-2 text-amber-300 font-bold">{r.receipt_no}</td>
                       <td className="py-2 text-slate-400 text-[11px]">{r.date} {r.time}</td>
