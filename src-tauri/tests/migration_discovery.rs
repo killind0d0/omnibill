@@ -30,12 +30,11 @@ fn test_migration_discovery_fresh_db_all_migrations_and_schema_verification() {
     let mut conn = open_connection(&db_path).expect("open connection");
     run_migrations(&mut conn, MIGRATIONS).expect("run all migrations");
 
-    // 1. Assert user_version matches LATEST_VERSION (5)
+    // 1. Assert user_version matches LATEST_VERSION
     let user_version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("query user_version");
-    assert_eq!(user_version, 5);
-    assert_eq!(LATEST_VERSION, 5);
+    assert_eq!(user_version, LATEST_VERSION);
 
     // 2. Assert brands table exists with expected columns
     let brands_cols = get_table_columns(&conn, "brands");
@@ -205,13 +204,13 @@ fn test_migration_discovery_upgrade_from_v4_with_data_intact_and_defaults() {
         params![lot_id, res_id],
     ).expect("insert test lot v4");
 
-    // 3. Apply full migrations (migrating to v5)
-    run_migrations(&mut conn, MIGRATIONS).expect("migrate from v4 to v5");
+    // 3. Apply full migrations (migrating to latest version)
+    run_migrations(&mut conn, MIGRATIONS).expect("migrate from v4 to latest");
 
-    let v5_version: i32 = conn
+    let migrated_version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .expect("v5 user_version");
-    assert_eq!(v5_version, 5);
+        .expect("migrated user_version");
+    assert_eq!(migrated_version, LATEST_VERSION);
 
     // 4. Assert old rows are intact and new columns hold their defaults
     let (name, brand_id, is_critical): (String, Option<i64>, i64) = conn
