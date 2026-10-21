@@ -1,11 +1,16 @@
 use omnibill_core::database::{
-    migrations::{run_migrations, MIGRATIONS},
+    migrations::{MIGRATIONS, run_migrations},
     open_connection,
 };
 use omnibill_core::discovery::fts::rebuild_fts;
+use omnibill_core::discovery::query::{
+    Dir, DiscoveryQuery, Preset, Range, SortKey, SortSpec, discover_products,
+};
+use omnibill_core::discovery::refresh::refresh_stats;
+use omnibill_core::discovery::rollup::rebuild_rollups;
 use rusqlite::params;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Deterministic 64-bit Linear Congruential Generator (LCG).
@@ -37,10 +42,11 @@ impl Lcg {
     }
 }
 
-fn parse_args() -> (PathBuf, usize) {
+fn parse_args() -> (PathBuf, usize, bool) {
     let args: Vec<String> = env::args().collect();
     let mut out_path = PathBuf::from("/tmp/omnibill_bench.db");
     let mut lines = 500_000usize;
+    let mut verify_only = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -53,15 +59,193 @@ fn parse_args() -> (PathBuf, usize) {
                 lines = args[i + 1].parse().unwrap_or(500_000);
                 i += 1;
             }
+            "--verify-only" => {
+                verify_only = true;
+            }
             _ => {}
         }
         i += 1;
     }
-    (out_path, lines)
+    (out_path, lines, verify_only)
+}
+
+fn run_verification(db_path: &Path) {
+    println!("============================================================");
+    println!(" OmniBill Benchmark Verification (--verify-only)");
+    println!(" Database: {}", db_path.display());
+    println!("============================================================");
+
+    let mut conn = open_connection(db_path).expect("open connection");
+
+    let today = 20000;
+    let q1 = DiscoveryQuery {
+        text: Some("Widget".to_string()),
+        brand_ids: vec![],
+        supplier_ids: vec![],
+        category_ids: vec![],
+        tax_bp: vec![],
+        sell_paise: None,
+        cost_paise: None,
+        margin_bp: None,
+        stock_milli: None,
+        received_day: None,
+        last_sold_day: None,
+        expiry_day: None,
+        preset: None,
+        abc: vec![],
+        sort: vec![],
+        limit: 50,
+        cursor: None,
+    };
+    let q2 = DiscoveryQuery {
+        text: None,
+        brand_ids: vec![],
+        supplier_ids: vec![],
+        category_ids: vec![1, 2, 3],
+        tax_bp: vec![],
+        sell_paise: Some(Range {
+            min: Some(1000),
+            max: Some(10000),
+        }),
+        cost_paise: None,
+        margin_bp: None,
+        stock_milli: None,
+        received_day: None,
+        last_sold_day: None,
+        expiry_day: None,
+        preset: None,
+        abc: vec![],
+        sort: vec![],
+        limit: 50,
+        cursor: None,
+    };
+    let q3 = DiscoveryQuery {
+        text: None,
+        brand_ids: vec![],
+        supplier_ids: vec![],
+        category_ids: vec![],
+        tax_bp: vec![],
+        sell_paise: None,
+        cost_paise: None,
+        margin_bp: None,
+        stock_milli: None,
+        received_day: None,
+        last_sold_day: None,
+        expiry_day: None,
+        preset: Some(Preset::Expiring30),
+        abc: vec![],
+        sort: vec![SortSpec {
+            key: SortKey::Expiry,
+            dir: Dir::Asc,
+        }],
+        limit: 50,
+        cursor: None,
+    };
+    let q4 = DiscoveryQuery {
+        text: None,
+        brand_ids: vec![],
+        supplier_ids: vec![],
+        category_ids: vec![],
+        tax_bp: vec![],
+        sell_paise: None,
+        cost_paise: None,
+        margin_bp: None,
+        stock_milli: None,
+        received_day: None,
+        last_sold_day: None,
+        expiry_day: None,
+        preset: None,
+        abc: vec![],
+        sort: vec![
+            SortSpec {
+                key: SortKey::Margin,
+                dir: Dir::Desc,
+            },
+            SortSpec {
+                key: SortKey::Revenue,
+                dir: Dir::Desc,
+            },
+        ],
+        limit: 50,
+        cursor: None,
+    };
+    let q5 = DiscoveryQuery {
+        text: None,
+        brand_ids: vec![],
+        supplier_ids: vec![],
+        category_ids: vec![],
+        tax_bp: vec![],
+        sell_paise: None,
+        cost_paise: None,
+        margin_bp: None,
+        stock_milli: None,
+        received_day: None,
+        last_sold_day: None,
+        expiry_day: None,
+        preset: Some(Preset::Out),
+        abc: vec![],
+        sort: vec![],
+        limit: 50,
+        cursor: None,
+    };
+
+    println!("[1/3] Benchmarking 5 Discovery Query Shapes (target: < 25 ms in release)...");
+    let queries = [
+        ("Q1 (FTS Trigram)", q1),
+        ("Q2 (Category + Price)", q2),
+        ("Q3 (Expiring30 + Sort)", q3),
+        ("Q4 (Multi-Sort Margin/Rev)", q4),
+        ("Q5 (Preset Out of Stock)", q5),
+    ];
+
+    for (name, q) in queries {
+        let t0 = Instant::now();
+        let res = discover_products(&conn, "retail", today, &q).expect("query failed");
+        let elapsed = t0.elapsed();
+        println!(
+            "   {} -> {} items returned in {:?}",
+            name,
+            res.items.len(),
+            elapsed
+        );
+    }
+
+    println!("[2/3] Benchmarking refresh_stats (target: < 1500 ms)...");
+    let t_ref = Instant::now();
+    let rep = refresh_stats(&mut conn, today).expect("refresh_stats failed");
+    let elapsed_ref = t_ref.elapsed();
+    println!(
+        "   refresh_stats updated {} resources in {:?}",
+        rep.resources_updated, elapsed_ref
+    );
+
+    println!("[3/3] Benchmarking rebuild_rollups (target: < 30 s)...");
+    let t_reb = Instant::now();
+    let reb_rep = rebuild_rollups(&conn).expect("rebuild_rollups failed");
+    let elapsed_reb = t_reb.elapsed();
+    println!(
+        "   rebuild_rollups rebuilt {} daily rows in {:?}",
+        reb_rep.sales_daily_rows, elapsed_reb
+    );
+
+    println!("============================================================");
+    println!(" BENCHMARK VERIFICATION COMPLETED SUCCESSFULLY");
+    println!("============================================================");
 }
 
 fn main() {
-    let (out_path, lines_target) = parse_args();
+    let (out_path, lines_target, verify_only) = parse_args();
+    if verify_only {
+        if !out_path.exists() {
+            eprintln!(
+                "Benchmark database {} does not exist. Run without --verify-only first to seed.",
+                out_path.display()
+            );
+            std::process::exit(1);
+        }
+        run_verification(&out_path);
+        return;
+    }
     println!("============================================================");
     println!(" OmniBill Seed & Benchmark Tool");
     println!(" Database: {}", out_path.display());

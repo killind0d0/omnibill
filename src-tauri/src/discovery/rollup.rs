@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Result};
+use rusqlite::{Connection, Result, params};
 
 /// Report of rows updated during rollup rebuild.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +192,12 @@ pub fn apply_cancellation(conn: &Connection, transaction_id: &str) -> Result<()>
             params![qty, taxable, cogs, res_id, day],
         )?;
 
+        conn.execute(
+            "DELETE FROM sales_daily
+             WHERE resource_id = ?1 AND day = ?2 AND bills <= 0 AND qty_milli <= 0",
+            params![res_id, day],
+        )?;
+
         update_product_stats_point_fields(conn, &res_id, None)?;
     }
 
@@ -209,6 +215,12 @@ pub fn apply_cancellation(conn: &Connection, transaction_id: &str) -> Result<()>
              net_paise = net_paise - ?1
          WHERE day = ?2 AND hour = ?3",
         params![bill_taxable, b_day, hour],
+    )?;
+
+    conn.execute(
+        "DELETE FROM sales_heat
+         WHERE day = ?1 AND hour = ?2 AND bills <= 0",
+        params![b_day, hour],
     )?;
 
     Ok(())
@@ -280,30 +292,64 @@ pub fn rebuild_rollups(conn: &Connection) -> Result<RebuildReport> {
         [],
     )?;
 
-    // 5. Update point fields on product_stats from stock_movements and transaction_items
+    // 5. Update point fields on product_stats in bulk using indexed temp tables
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS temp_rebuild_stock (
+            resource_id TEXT PRIMARY KEY,
+            stock_milli INTEGER NOT NULL
+         )",
+        [],
+    )?;
+    conn.execute("DELETE FROM temp_rebuild_stock", [])?;
+    conn.execute(
+        "INSERT INTO temp_rebuild_stock (resource_id, stock_milli)
+         SELECT resource_id, SUM(quantity_delta_milli)
+         FROM stock_movements
+         GROUP BY resource_id",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS temp_rebuild_sold (
+            resource_id TEXT PRIMARY KEY,
+            last_sold_day INTEGER NOT NULL
+         )",
+        [],
+    )?;
+    conn.execute("DELETE FROM temp_rebuild_sold", [])?;
+    conn.execute(
+        "INSERT INTO temp_rebuild_sold (resource_id, last_sold_day)
+         SELECT resource_id, MAX(day)
+         FROM sales_daily
+         WHERE qty_milli > 0
+         GROUP BY resource_id",
+        [],
+    )?;
+
     let product_stats_updated = conn.execute(
         "UPDATE product_stats SET
              stock_milli = COALESCE((
-                 SELECT SUM(sm.quantity_delta_milli)
-                 FROM stock_movements sm
-                 WHERE sm.resource_id = product_stats.resource_id
+                 SELECT s.stock_milli
+                 FROM temp_rebuild_stock s
+                 WHERE s.resource_id = product_stats.resource_id
              ), 0),
              stock_value_paise = (
                  COALESCE((
-                     SELECT SUM(sm.quantity_delta_milli)
-                     FROM stock_movements sm
-                     WHERE sm.resource_id = product_stats.resource_id
+                     SELECT s.stock_milli
+                     FROM temp_rebuild_stock s
+                     WHERE s.resource_id = product_stats.resource_id
                  ), 0) / 1000
              ) * product_stats.avg_cost_paise,
              last_sold_day = COALESCE((
-                 SELECT MAX(ti.business_day)
-                 FROM transaction_items ti
-                 JOIN transactions t ON ti.transaction_id = t.id
-                 WHERE ti.resource_id = product_stats.resource_id
-                   AND t.status = 'POSTED' AND t.transaction_type = 'SALE'
+                 SELECT l.last_sold_day
+                 FROM temp_rebuild_sold l
+                 WHERE l.resource_id = product_stats.resource_id
              ), 0)",
         [],
     )? as u64;
+
+    conn.execute("DROP TABLE IF EXISTS temp_rebuild_stock", [])?;
+    conn.execute("DROP TABLE IF EXISTS temp_rebuild_sold", [])?;
 
     Ok(RebuildReport {
         sales_daily_rows,
