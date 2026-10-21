@@ -16,10 +16,12 @@ use std::fmt;
 use std::sync::Mutex;
 
 use super::audit::record_auth_event;
+use super::licence::{Licence, Mode, ModeInputs, compute_mode, export_allowed};
 use super::permissions::Permission;
 use super::policy_table::{Feature, find_policy};
 use super::roles::Role;
 use super::session::{SessionError, SessionManager};
+use ed25519_dalek::VerifyingKey;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthContext {
@@ -29,6 +31,7 @@ pub struct AuthContext {
     pub role: Option<String>,
     pub is_primary_owner: bool,
     pub is_public: bool,
+    pub mode: Mode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,12 +76,24 @@ impl std::error::Error for GuardError {}
 
 pub trait LicenceFeatureProvider: Send + Sync {
     fn has_feature(&self, feature: Feature) -> bool;
+    fn get_licence(&self) -> Option<&Licence> {
+        None
+    }
+    fn plan(&self) -> Option<&str> {
+        None
+    }
+    fn features_list(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub struct MockAllFeaturesLicensed;
 impl LicenceFeatureProvider for MockAllFeaturesLicensed {
     fn has_feature(&self, _feature: Feature) -> bool {
         true
+    }
+    fn plan(&self) -> Option<&str> {
+        Some("pro")
     }
 }
 
@@ -91,12 +106,163 @@ impl LicenceFeatureProvider for MockNoFeaturesLicensed {
 
 pub trait ModeAllowsProvider: Send + Sync {
     fn mode_allows(&self, write: bool, export: bool, print: bool) -> bool;
+    fn current_mode(&self) -> Mode {
+        Mode::Full
+    }
+    fn touch_max_seen(&self, _now_ms: i64) {}
+    fn is_export_allowed(&self, _now_ms: i64) -> bool {
+        false
+    }
+    fn last_checkin_ms(&self) -> i64 {
+        0
+    }
 }
 
 pub struct MockAllModesAllowed;
 impl ModeAllowsProvider for MockAllModesAllowed {
     fn mode_allows(&self, _write: bool, _export: bool, _print: bool) -> bool {
         true
+    }
+    fn current_mode(&self) -> Mode {
+        Mode::Full
+    }
+}
+
+pub struct StaticModeProvider {
+    pub mode: Mode,
+    pub export_allowed_override: bool,
+    pub max_seen: Mutex<i64>,
+}
+
+impl StaticModeProvider {
+    pub fn new(mode: Mode) -> Self {
+        Self {
+            mode,
+            export_allowed_override: false,
+            max_seen: Mutex::new(0),
+        }
+    }
+
+    pub fn with_export_permit(mode: Mode) -> Self {
+        Self {
+            mode,
+            export_allowed_override: true,
+            max_seen: Mutex::new(0),
+        }
+    }
+}
+
+impl ModeAllowsProvider for StaticModeProvider {
+    fn mode_allows(&self, write: bool, export: bool, print: bool) -> bool {
+        match &self.mode {
+            Mode::Full => true,
+            Mode::ReadOnly(_) => {
+                if print || write {
+                    return false;
+                }
+                if export {
+                    return self.export_allowed_override;
+                }
+                true
+            }
+            Mode::Unlicensed => false,
+        }
+    }
+
+    fn current_mode(&self) -> Mode {
+        self.mode.clone()
+    }
+
+    fn touch_max_seen(&self, now_ms: i64) {
+        if let Ok(mut lock) = self.max_seen.lock() {
+            *lock = (*lock).max(now_ms);
+        }
+    }
+
+    fn is_export_allowed(&self, _now_ms: i64) -> bool {
+        self.export_allowed_override
+    }
+}
+
+pub struct RealLicenceModeProvider {
+    pub licence: Option<Licence>,
+    pub key: VerifyingKey,
+    pub inputs: ModeInputs,
+    pub max_seen: Mutex<i64>,
+}
+
+impl RealLicenceModeProvider {
+    pub fn new(licence: Option<Licence>, key: VerifyingKey, inputs: ModeInputs) -> Self {
+        let max_seen = Mutex::new(inputs.max_seen_ms);
+        Self {
+            licence,
+            key,
+            inputs,
+            max_seen,
+        }
+    }
+}
+
+impl LicenceFeatureProvider for RealLicenceModeProvider {
+    fn has_feature(&self, feature: Feature) -> bool {
+        if let Some(ref lic) = self.licence {
+            lic.payload.features.iter().any(|f| f == feature.as_str())
+        } else {
+            false
+        }
+    }
+
+    fn get_licence(&self) -> Option<&Licence> {
+        self.licence.as_ref()
+    }
+
+    fn plan(&self) -> Option<&str> {
+        self.licence.as_ref().map(|l| l.payload.plan.as_str())
+    }
+
+    fn features_list(&self) -> Vec<String> {
+        self.licence
+            .as_ref()
+            .map(|l| l.payload.features.clone())
+            .unwrap_or_default()
+    }
+}
+
+impl ModeAllowsProvider for RealLicenceModeProvider {
+    fn mode_allows(&self, write: bool, export: bool, print: bool) -> bool {
+        let mode = self.current_mode();
+        match mode {
+            Mode::Full => true,
+            Mode::ReadOnly(_) => {
+                if print || write {
+                    return false;
+                }
+                if export {
+                    return self.is_export_allowed(self.inputs.now_ms);
+                }
+                true
+            }
+            Mode::Unlicensed => false,
+        }
+    }
+
+    fn current_mode(&self) -> Mode {
+        compute_mode(self.licence.as_ref(), &self.key, &self.inputs)
+    }
+
+    fn touch_max_seen(&self, now_ms: i64) {
+        if let Ok(mut lock) = self.max_seen.lock() {
+            *lock = (*lock).max(now_ms);
+        }
+    }
+
+    fn is_export_allowed(&self, now_ms: i64) -> bool {
+        let mode = self.current_mode();
+        export_allowed(self.licence.as_ref(), &self.key, &mode, now_ms)
+    }
+
+    fn last_checkin_ms(&self) -> i64 {
+        self.inputs.last_checkin_ms
     }
 }
 
@@ -194,7 +360,16 @@ pub fn effective_permissions(role: Role, vertical: &str) -> Vec<Permission> {
 }
 
 /// Main authorization guard for all incoming command requests.
-/// Enforces all 7 stages in exact sequential order.
+/// Enforces all stages in exact sequential order:
+/// 1. Policy registration check
+/// 2. Mode computation: Unlicensed -> only public commands
+/// 3. Public bypass
+/// 4. Session token validation
+/// 5. Mandatory password change check
+/// 6. Role permission check
+/// 7. Plan feature flag licensing
+/// 8. Read-only / no-export / no-print enforcement
+/// 9. touch_max_seen advancement on success
 pub fn authorize(
     ctx: &GuardContext<'_>,
     token: Option<&str>,
@@ -210,6 +385,22 @@ pub fn authorize(
         }
     };
 
+    // Mode computation
+    let current_mode = ctx.mode.current_mode();
+
+    // - Unlicensed -> only public commands
+    if current_mode == Mode::Unlicensed && !policy.public {
+        audit_denial(
+            token.unwrap_or("anon"),
+            cmd,
+            "unlicensed: public only",
+            now_ms,
+        );
+        return Err(GuardError::ModeRestricted(
+            "System is unlicensed: only public commands are permitted".into(),
+        ));
+    }
+
     // 2. Public commands return early without requiring session
     if policy.public {
         return Ok(AuthContext {
@@ -219,6 +410,7 @@ pub fn authorize(
             role: None,
             is_primary_owner: false,
             is_public: true,
+            mode: current_mode,
         });
     }
 
@@ -255,7 +447,6 @@ pub fn authorize(
     };
 
     // 4. User active & must_change_password enforcement
-    // (If user must change password, only change_password and logout are allowed)
     if session.must_change_password {
         let is_allowed = cmd == "change_password"
             || cmd == "logout"
@@ -303,7 +494,53 @@ pub fn authorize(
         return Err(GuardError::FeatureNotLicensed(required_feat));
     }
 
-    // 7. Mode allows hook (read-only, export, print)
+    // 7. Operating mode enforcement (ReadOnly, Export, Print)
+    if let Mode::ReadOnly(ref reason) = current_mode {
+        // Exemption: get_access_status is always allowed in read-only mode
+        if cmd != "get_access_status" {
+            // deny every write: true
+            if policy.write {
+                audit_denial(
+                    &session.username,
+                    cmd,
+                    &format!("write denied in read-only mode ({:?})", reason),
+                    now_ms,
+                );
+                return Err(GuardError::ModeRestricted(format!(
+                    "Write operations are prohibited in read-only mode ({:?})",
+                    reason
+                )));
+            }
+
+            // deny print: true ALWAYS
+            if policy.print {
+                audit_denial(
+                    &session.username,
+                    cmd,
+                    "print denied in read-only mode",
+                    now_ms,
+                );
+                return Err(GuardError::ModeRestricted(
+                    "Printing is strictly prohibited in read-only mode".into(),
+                ));
+            }
+
+            // deny export: true unless export_allowed
+            if policy.export && !ctx.mode.is_export_allowed(now_ms) {
+                audit_denial(
+                    &session.username,
+                    cmd,
+                    "export denied in read-only mode without permit",
+                    now_ms,
+                );
+                return Err(GuardError::ModeRestricted(
+                    "Export operations are prohibited without a valid export permit in read-only mode".into(),
+                ));
+            }
+        }
+    }
+
+    // Hook compatibility check
     if !ctx
         .mode
         .mode_allows(policy.write, policy.export, policy.print)
@@ -314,6 +551,9 @@ pub fn authorize(
         ));
     }
 
+    // Every successful authorize calls touch_max_seen
+    ctx.mode.touch_max_seen(now_ms);
+
     Ok(AuthContext {
         user_id: Some(session.user_id),
         username: Some(session.username),
@@ -321,5 +561,6 @@ pub fn authorize(
         role: Some(session.role),
         is_primary_owner: session.is_primary_owner,
         is_public: false,
+        mode: current_mode,
     })
 }

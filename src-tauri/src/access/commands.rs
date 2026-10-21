@@ -115,7 +115,55 @@ pub fn get_access_status(
     )
     .map_err(|e| e.to_string())?;
 
+    let (mode_str, reason_str) = match &auth.mode {
+        super::licence::Mode::Full => ("full", None),
+        super::licence::Mode::ReadOnly(super::licence::Reason::BadSignature) => {
+            ("read_only", Some("bad_signature"))
+        }
+        super::licence::Mode::ReadOnly(super::licence::Reason::WrongDevice) => {
+            ("read_only", Some("wrong_device"))
+        }
+        super::licence::Mode::ReadOnly(super::licence::Reason::WrongTenant) => {
+            ("read_only", Some("wrong_tenant"))
+        }
+        super::licence::Mode::ReadOnly(super::licence::Reason::Suspended) => {
+            ("read_only", Some("suspended"))
+        }
+        super::licence::Mode::ReadOnly(super::licence::Reason::ClockTampered) => {
+            ("read_only", Some("clock_tampered"))
+        }
+        super::licence::Mode::ReadOnly(super::licence::Reason::Expired) => {
+            ("read_only", Some("expired"))
+        }
+        super::licence::Mode::ReadOnly(super::licence::Reason::CheckinRequired) => {
+            ("read_only", Some("checkin_required"))
+        }
+        super::licence::Mode::Unlicensed => ("unlicensed", None),
+    };
+
+    let licence_opt = state.licence.get_licence();
+    let valid_until_day = licence_opt.map(|l| l.payload.valid_until_day);
+    let plan = licence_opt
+        .map(|l| l.payload.plan.clone())
+        .or_else(|| state.licence.plan().map(String::from));
+    let features = licence_opt
+        .map(|l| l.payload.features.clone())
+        .unwrap_or_else(|| state.licence.features_list());
+    let max_counters = licence_opt.map(|l| l.payload.max_counters).unwrap_or(1);
+    let support_text = licence_opt
+        .map(|l| l.payload.support_text.clone())
+        .unwrap_or_default();
+    let last_checkin_ms = state.mode.last_checkin_ms();
+
     Ok(serde_json::json!({
+        "mode": mode_str,
+        "reason": reason_str,
+        "valid_until_day": valid_until_day,
+        "plan": plan,
+        "features": features,
+        "max_counters": max_counters,
+        "last_checkin_ms": last_checkin_ms,
+        "support_text": support_text,
         "user_id": auth.user_id,
         "username": auth.username,
         "role": auth.role,
