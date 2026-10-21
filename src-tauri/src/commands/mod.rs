@@ -1,3 +1,4 @@
+use crate::access::{AppAuthState, authorize};
 use crate::database::open_connection;
 pub use crate::discovery::commands::{
     GraphData, GraphKind, GraphParams, cmd_acknowledge_alert, cmd_day_summary_text,
@@ -318,6 +319,177 @@ pub fn cmd_create_resource(
         current_stock_milli: current_stock,
         created_at,
     })
+}
+
+// ============================================================================
+// Guarded IPC Commands (Batch 1: Database, Posting, Resources)
+// ============================================================================
+
+/// Guarded execution for database migrations command.
+pub fn cmd_init_database_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<i32, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_run_migrations",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_init_database(db_path)
+}
+
+/// Guarded execution for ledger verification command.
+pub fn cmd_verify_ledger_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<Vec<String>, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_verify_ledger",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_verify_ledger(db_path)
+}
+
+/// Guarded execution for sales posting.
+pub fn cmd_post_sale_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: SaleInput,
+    now_ms: i64,
+) -> Result<PostedSale, String> {
+    let _auth = authorize(&state.as_guard_context(), token, "cmd_post_sale", now_ms)
+        .map_err(|e| e.to_string())?;
+    cmd_post_sale(db_path, input)
+}
+
+/// Guarded execution for sales posting with payments.
+pub fn cmd_post_sale_with_payments_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: SaleWithPaymentsInput,
+    now_ms: i64,
+) -> Result<PostedSaleWithPayments, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_post_sale_with_payments",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_sale_with_payments(db_path, input)
+}
+
+/// Guarded execution for purchase posting.
+pub fn cmd_post_purchase_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: PurchaseInput,
+    now_ms: i64,
+) -> Result<PostedPurchase, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_post_purchase",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_purchase(db_path, input)
+}
+
+/// Guarded execution for payment posting.
+pub fn cmd_post_payment_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: PaymentInput,
+    now_ms: i64,
+) -> Result<PostedPayment, String> {
+    let _auth = authorize(&state.as_guard_context(), token, "cmd_post_payment", now_ms)
+        .map_err(|e| e.to_string())?;
+    cmd_post_payment(db_path, input)
+}
+
+/// Guarded execution for sales return posting.
+pub fn cmd_post_sale_return_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: SaleReturnInput,
+    now_ms: i64,
+) -> Result<PostedReturn, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_post_sale_return",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_sale_return(db_path, input)
+}
+
+/// Guarded execution for purchase return posting.
+pub fn cmd_post_purchase_return_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: PurchaseReturnInput,
+    now_ms: i64,
+) -> Result<PostedReturn, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_post_purchase_return",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_purchase_return(db_path, input)
+}
+
+/// Guarded execution for retrieving resources list.
+pub fn cmd_get_resources_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<Vec<ResourceRecord>, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_list_resources",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_get_resources(db_path)
+}
+
+/// Guarded execution for resource creation.
+pub fn cmd_create_resource_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: CreateResourceInput,
+    now_ms: i64,
+) -> Result<ResourceRecord, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_record_resource",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_create_resource(db_path, input)
 }
 
 /// Retrieves all registered entities (customers, suppliers, patients, students).

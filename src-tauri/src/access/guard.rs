@@ -107,6 +107,60 @@ pub struct GuardContext<'a> {
     pub mode: &'a dyn ModeAllowsProvider,
 }
 
+pub struct AppAuthState {
+    pub session_mgr: SessionManager,
+    pub vertical: String,
+    pub licence: Box<dyn LicenceFeatureProvider>,
+    pub mode: Box<dyn ModeAllowsProvider>,
+}
+
+impl AppAuthState {
+    pub fn new(vertical: &str) -> Self {
+        Self {
+            session_mgr: SessionManager::new(),
+            vertical: vertical.to_string(),
+            licence: Box::new(MockAllFeaturesLicensed),
+            mode: Box::new(MockAllModesAllowed),
+        }
+    }
+
+    pub fn as_guard_context(&self) -> GuardContext<'_> {
+        GuardContext {
+            session_mgr: &self.session_mgr,
+            vertical: &self.vertical,
+            licence: self.licence.as_ref(),
+            mode: self.mode.as_ref(),
+        }
+    }
+}
+
+impl From<GuardError> for String {
+    fn from(err: GuardError) -> Self {
+        match err {
+            GuardError::PermissionDenied(_) => "Not allowed".to_string(),
+            GuardError::SessionExpired(_) => "Session expired".to_string(),
+            GuardError::FeatureNotLicensed(_) => "Licence required".to_string(),
+            GuardError::ModeRestricted(msg) => format!("Mode restricted: {}", msg),
+            GuardError::MustChangePassword => "Password change required".to_string(),
+            GuardError::UnknownCommand(cmd) => format!("Unknown command '{}'", cmd),
+            GuardError::MissingSessionToken | GuardError::SessionInvalid => {
+                "Invalid or missing session token".to_string()
+            }
+            GuardError::UserInactive => "User account is deactivated".to_string(),
+            GuardError::LockError => "Internal server error".to_string(),
+        }
+    }
+}
+
+pub fn guard_command(
+    state: &AppAuthState,
+    token: Option<&str>,
+    cmd: &str,
+    now_ms: i64,
+) -> Result<AuthContext, String> {
+    authorize(&state.as_guard_context(), token, cmd, now_ms).map_err(Into::into)
+}
+
 static DENIAL_AUDIT_LOG: Mutex<Option<HashMap<(String, String), i64>>> = Mutex::new(None);
 
 fn audit_denial(user_or_token: &str, cmd: &str, reason: &str, now_ms: i64) {

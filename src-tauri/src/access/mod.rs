@@ -12,8 +12,9 @@ pub mod users;
 
 pub use audit::{AuthAuditEvent, clear_audit_events, get_audit_events, record_auth_event};
 pub use guard::{
-    AuthContext, GuardContext, GuardError, LicenceFeatureProvider, MockAllFeaturesLicensed,
-    MockAllModesAllowed, MockNoFeaturesLicensed, ModeAllowsProvider, authorize,
+    AppAuthState, AuthContext, GuardContext, GuardError, LicenceFeatureProvider,
+    MockAllFeaturesLicensed, MockAllModesAllowed, MockNoFeaturesLicensed, ModeAllowsProvider,
+    authorize, guard_command,
 };
 pub use password::{PasswordError, check_strength, hash_password, verify_password};
 pub use permissions::Permission;
