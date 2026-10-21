@@ -1,10 +1,16 @@
+use omnibill_core::access::guard::{AppAuthState, GuardError, authorize};
 use omnibill_core::commands::*;
 use omnibill_core::database::migrations::{MIGRATIONS, get_user_version, run_migrations};
 use omnibill_core::database::open_connection;
+use omnibill_core::database::queries::verify_ledger;
+use omnibill_core::discovery::commands::*;
+use omnibill_core::discovery::query::DiscoveryQuery;
+use omnibill_core::reports::get_trial_balance;
 use std::env;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn default_db_path() -> String {
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -50,22 +56,25 @@ fn handle_init(db_path: &str) {
 
 fn handle_audit(db_path: &str) {
     println!("[OmniBill] Running ledger audit on: {}", db_path);
-    match cmd_verify_ledger(db_path.to_string()) {
-        Ok(discrepancies) => {
-            if discrepancies.is_empty() {
-                println!(
-                    "[OmniBill] AUDIT PASSED: 100% Double-entry consistency verified. Zero discrepancies found."
-                );
-            } else {
-                eprintln!(
-                    "[OmniBill] AUDIT FAILED: {} discrepancies detected:",
-                    discrepancies.len()
-                );
-                for d in discrepancies {
-                    eprintln!("  - {}", d);
+    match open_connection(db_path) {
+        Ok(conn) => match verify_ledger(&conn) {
+            Ok(discrepancies) => {
+                if discrepancies.is_empty() {
+                    println!(
+                        "[OmniBill] AUDIT PASSED: 100% Double-entry consistency verified. Zero discrepancies found."
+                    );
+                } else {
+                    eprintln!(
+                        "[OmniBill] AUDIT FAILED: {} discrepancies detected:",
+                        discrepancies.len()
+                    );
+                    for d in discrepancies {
+                        eprintln!("  - {}", d);
+                    }
                 }
             }
-        }
+            Err(e) => eprintln!("[OmniBill] ERROR: {}", e),
+        },
         Err(e) => eprintln!("[OmniBill] ERROR: {}", e),
     }
 }
@@ -99,7 +108,7 @@ fn handle_info(db_path: &str) {
             println!("  Catalog Resources:   {} items", resource_count);
             println!("  Total Transactions:  {} invoices", tx_count);
 
-            match cmd_get_trial_balance(db_path.to_string()) {
+            match get_trial_balance(&conn) {
                 Ok(tb) => {
                     println!(
                         "  Trial Balance:       Total Debits: ₹{:.2} | Total Credits: ₹{:.2}",
@@ -259,7 +268,26 @@ pub fn process_http_request(
     }
 
     // Dispatch routes
-    let (status, body) = dispatch_route(req.method, req.path, req.body, db_path);
+    if req.path == "/api/info" {
+        return (
+            200,
+            serde_json::json!({ "status": "ok", "app": "OmniBill ERP", "version": "0.1.0" })
+                .to_string(),
+            req.origin.map(String::from),
+        );
+    }
+
+    let auth_state = AppAuthState::new("retail");
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let bearer = req
+        .authorization
+        .and_then(|a| a.trim().strip_prefix("Bearer ").map(|t| t.trim()));
+
+    let (status, body) = guarded_dispatch(&auth_state, bearer, req.path, req.body, now_ms, db_path);
     (status, body, req.origin.map(String::from))
 }
 
@@ -320,222 +348,617 @@ fn handle_client(mut stream: TcpStream, db_path: &str, port: u16) {
     let _ = stream.write_all(response.as_bytes());
 }
 
-fn dispatch_route(method: &str, path: &str, body: &str, db_path: &str) -> (u16, String) {
-    match (method, path) {
-        ("GET", "/api/info") => (
-            200,
-            serde_json::json!({ "status": "ok", "app": "OmniBill ERP", "version": "0.1.0" })
-                .to_string(),
-        ),
-        ("GET", "/api/resources") => match cmd_get_resources(db_path.to_string()) {
+pub const ROUTES: &[(&str, &str)] = omnibill_core::access::routes::ROUTES;
+
+/// The central guarded HTTP dispatcher.
+///
+/// NOTE: Direct calls to `cmd_*` from Rust code and tests are the internal API
+/// and bypass the guard by design. Only the HTTP boundary is guarded.
+pub fn guarded_dispatch(
+    auth_state: &AppAuthState,
+    bearer: Option<&str>,
+    route: &str,
+    args: &str,
+    now_ms: i64,
+    db_path: &str,
+) -> (u16, String) {
+    // 1. Look up the route in ROUTES (unknown -> 404 fail-closed)
+    let cmd_name = match ROUTES.iter().find(|(r, _)| *r == route) {
+        Some((_, cmd)) => *cmd,
+        None => {
+            return (404, serde_json::json!({ "error": "Not Found" }).to_string());
+        }
+    };
+
+    // 2. Authorize using the policy name for that cmd_*
+    let _auth = match authorize(&auth_state.as_guard_context(), bearer, cmd_name, now_ms) {
+        Ok(user) => user,
+        Err(guard_err) => {
+            return match guard_err {
+                GuardError::MissingSessionToken => (
+                    401,
+                    serde_json::json!({ "error": "Unauthorized: missing bearer token" }).to_string(),
+                ),
+                GuardError::SessionInvalid => (
+                    401,
+                    serde_json::json!({ "error": "Unauthorized: invalid session token" }).to_string(),
+                ),
+                GuardError::SessionExpired(_) => (
+                    401,
+                    serde_json::json!({ "error": "Unauthorized: session expired" }).to_string(),
+                ),
+                GuardError::UserInactive => (
+                    403,
+                    serde_json::json!({ "error": "Forbidden: user account is deactivated" }).to_string(),
+                ),
+                GuardError::MustChangePassword => (
+                    403,
+                    serde_json::json!({ "error": "Forbidden: password change required" }).to_string(),
+                ),
+                GuardError::PermissionDenied(perm) => (
+                    403,
+                    serde_json::json!({ "error": format!("Forbidden: missing permission {:?}", perm) }).to_string(),
+                ),
+                GuardError::ModeRestricted(msg) => (
+                    403,
+                    serde_json::json!({ "error": format!("Forbidden: {}", msg) }).to_string(),
+                ),
+                GuardError::UnknownCommand(_) => (
+                    404,
+                    serde_json::json!({ "error": "Not Found" }).to_string(),
+                ),
+                GuardError::FeatureNotLicensed(feat) => (
+                    403,
+                    serde_json::json!({ "error": format!("Forbidden: feature {:?} not licensed", feat) }).to_string(),
+                ),
+                GuardError::LockError => (
+                    500,
+                    serde_json::json!({ "error": "Internal state error" }).to_string(),
+                ),
+            };
+        }
+    };
+
+    // 3. Dispatch to the command
+    match cmd_name {
+        "login" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                username: String,
+                password: String,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match open_connection(db_path) {
+                    Ok(conn) => match omnibill_core::access::commands::login(auth_state, &conn, &r.username, &r.password, now_ms) {
+                        Ok(resp) => (200, serde_json::to_string(&resp).unwrap_or_default()),
+                        Err(e) => (401, serde_json::json!({ "error": e }).to_string()),
+                    },
+                    Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "get_boot_state" => {
+            match open_connection(db_path) {
+                Ok(conn) => match omnibill_core::access::commands::get_boot_state(auth_state, &conn) {
+                    Ok(resp) => (200, serde_json::to_string(&resp).unwrap_or_default()),
+                    Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "logout" => {
+            match omnibill_core::access::commands::logout(auth_state, bearer, now_ms) {
+                Ok(()) => (200, serde_json::json!({ "status": "logged_out" }).to_string()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        "change_password" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "oldPassword")]
+                old_password: String,
+                #[serde(rename = "newPassword")]
+                new_password: String,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match open_connection(db_path) {
+                    Ok(mut conn) => match omnibill_core::access::commands::change_password(auth_state, &mut conn, bearer, &r.old_password, &r.new_password, now_ms) {
+                        Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
+                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                    },
+                    Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "get_access_status" => {
+            match omnibill_core::access::commands::get_access_status(auth_state, bearer, now_ms) {
+                Ok(status) => (200, serde_json::to_string(&status).unwrap_or_default()),
+                Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        "get_role_permissions" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                role: String,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match open_connection(db_path) {
+                    Ok(conn) => match omnibill_core::access::commands_roles::get_role_permissions(auth_state, &conn, bearer, &r.role, now_ms) {
+                        Ok(perms) => (200, serde_json::to_string(&perms).unwrap_or_default()),
+                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                    },
+                    Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "set_role_permission" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                role: String,
+                permission: String,
+                granted: bool,
+                #[allow(dead_code)]
+                #[serde(default)]
+                confirm: bool,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match open_connection(db_path) {
+                    Ok(conn) => match omnibill_core::access::commands_roles::set_role_permission(auth_state, &conn, bearer, &r.role, &r.permission, r.granted, r.confirm, now_ms) {
+                        Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
+                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                    },
+                    Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "reset_role_permissions" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                role: String,
+                #[allow(dead_code)]
+                #[serde(default)]
+                confirm: bool,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match open_connection(db_path) {
+                    Ok(conn) => match omnibill_core::access::commands_roles::reset_role_permissions(auth_state, &conn, bearer, &r.role, now_ms) {
+                        Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
+                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                    },
+                    Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_run_migrations" => match cmd_init_database(db_path.to_string()) {
+            Ok(v) => (200, serde_json::json!({ "version": v }).to_string()),
+            Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+        },
+        "cmd_get_schema_version" => match cmd_get_schema_version_guarded(auth_state, bearer, db_path.to_string(), now_ms) {
+            Ok(v) => (200, serde_json::json!({ "version": v }).to_string()),
+            Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+        },
+        "cmd_verify_ledger" => match cmd_verify_ledger(db_path.to_string()) {
             Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
             Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
         },
-        ("GET", "/api/entities") => match cmd_get_entities(db_path.to_string()) {
+        "cmd_record_entity" => {
+            match serde_json::from_str::<CreateEntityInput>(args) {
+                Ok(input) => match cmd_create_entity(db_path.to_string(), input) {
+                    Ok(ent) => (200, serde_json::to_string(&ent).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_list_entities" => match cmd_get_entities(db_path.to_string()) {
             Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
             Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
         },
-        ("GET", "/api/trial_balance") => match cmd_get_trial_balance(db_path.to_string()) {
+        "cmd_record_resource" => {
+            match serde_json::from_str::<CreateResourceInput>(args) {
+                Ok(input) => match cmd_create_resource(db_path.to_string(), input) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_list_resources" => match cmd_get_resources(db_path.to_string()) {
             Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
             Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
         },
-        ("GET", "/api/stock_summary") => match cmd_get_stock_summary(db_path.to_string()) {
-            Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
-            Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
-        },
-        ("POST", "/api/post_sale") => {
-            match serde_json::from_str::<omnibill_core::posting::SaleInput>(body) {
+        "cmd_post_sale" => {
+            match serde_json::from_str::<omnibill_core::posting::SaleInput>(args) {
                 Ok(input) => match cmd_post_sale(db_path.to_string(), input) {
                     Ok(sale) => (200, serde_json::to_string(&sale).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/post_sale_with_payments") => {
-            match serde_json::from_str::<omnibill_core::posting::SaleWithPaymentsInput>(body) {
+        "cmd_post_sale_with_payments" => {
+            match serde_json::from_str::<omnibill_core::posting::SaleWithPaymentsInput>(args) {
                 Ok(input) => match cmd_post_sale_with_payments(db_path.to_string(), input) {
                     Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/post_purchase") => {
-            match serde_json::from_str::<omnibill_core::posting::PurchaseInput>(body) {
-                Ok(input) => match cmd_post_purchase(db_path.to_string(), input) {
-                    Ok(pur) => (200, serde_json::to_string(&pur).unwrap_or_default()),
+        "cmd_collect_customer_payment" => {
+            match serde_json::from_str::<omnibill_core::posting::PaymentInput>(args) {
+                Ok(input) => match cmd_post_payment(db_path.to_string(), input) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/post_payment") => {
-            match serde_json::from_str::<omnibill_core::posting::PaymentInput>(body) {
+        "cmd_post_payment" => {
+            match serde_json::from_str::<omnibill_core::posting::PaymentInput>(args) {
                 Ok(input) => match cmd_post_payment(db_path.to_string(), input) {
                     Ok(pay) => (200, serde_json::to_string(&pay).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/discovery/products") => {
+        "cmd_post_purchase" => {
+            match serde_json::from_str::<omnibill_core::posting::PurchaseInput>(args) {
+                Ok(input) => match cmd_post_purchase(db_path.to_string(), input) {
+                    Ok(pur) => (200, serde_json::to_string(&pur).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_disburse_supplier_payout" => {
+            match serde_json::from_str::<omnibill_core::posting::PaymentInput>(args) {
+                Ok(input) => match cmd_post_payment(db_path.to_string(), input) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_post_sale_return" => {
+            match serde_json::from_str::<omnibill_core::posting::SaleReturnInput>(args) {
+                Ok(input) => match cmd_post_sale_return(db_path.to_string(), input) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_post_purchase_return" => {
+            match serde_json::from_str::<omnibill_core::posting::PurchaseReturnInput>(args) {
+                Ok(input) => match cmd_post_purchase_return(db_path.to_string(), input) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_get_day_book" => {
             #[derive(serde::Deserialize)]
             struct Req {
-                query: omnibill_core::discovery::query::DiscoveryQuery,
+                date: String,
+            }
+            let date = serde_json::from_str::<Req>(args)
+                .map(|r| r.date)
+                .unwrap_or_else(|_| args.trim_matches('"').to_string());
+            match cmd_get_day_book(db_path.to_string(), date) {
+                Ok(db) => (200, serde_json::to_string(&db).unwrap_or_default()),
+                Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        "cmd_get_trial_balance" => match cmd_get_trial_balance(db_path.to_string()) {
+            Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+            Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+        },
+        "cmd_get_stock_summary" => match cmd_get_stock_summary(db_path.to_string()) {
+            Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+            Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+        },
+        "cmd_get_gstr1" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                fy: String,
+                month: Option<u32>,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_get_gstr1_summary(db_path.to_string(), r.fy, r.month) {
+                    Ok(rep) => (200, serde_json::to_string(&rep).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_discover_products" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                query: DiscoveryQuery,
                 vertical: Option<String>,
             }
-            match serde_json::from_str::<Req>(body) {
+            match serde_json::from_str::<Req>(args) {
                 Ok(r) => match cmd_discover_products(db_path, r.query, r.vertical) {
                     Ok(page) => (200, serde_json::to_string(&page).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/discovery/facets") => {
+        "cmd_discover_facets" => {
             #[derive(serde::Deserialize)]
             struct Req {
-                query: omnibill_core::discovery::query::DiscoveryQuery,
+                query: DiscoveryQuery,
                 vertical: Option<String>,
             }
-            match serde_json::from_str::<Req>(body) {
+            match serde_json::from_str::<Req>(args) {
                 Ok(r) => match cmd_discover_facets(db_path, r.query, r.vertical) {
                     Ok(facets) => (200, serde_json::to_string(&facets).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/discovery/sell_graph") => {
+        "cmd_get_filter_facets" => {
             #[derive(serde::Deserialize)]
             struct Req {
-                kind: GraphKind,
-                params: GraphParams,
                 vertical: Option<String>,
             }
-            match serde_json::from_str::<Req>(body) {
+            let req = serde_json::from_str::<Req>(args).unwrap_or(Req { vertical: None });
+            match cmd_discover_facets(db_path, DiscoveryQuery::default(), req.vertical) {
+                Ok(facets) => (200, serde_json::to_string(&facets).unwrap_or_default()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        "cmd_sell_graph" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                kind: omnibill_core::discovery::commands::GraphKind,
+                params: omnibill_core::discovery::commands::GraphParams,
+                vertical: Option<String>,
+            }
+            match serde_json::from_str::<Req>(args) {
                 Ok(r) => match cmd_sell_graph(db_path, r.kind, r.params, r.vertical) {
                     Ok(data) => (200, serde_json::to_string(&data).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/discovery/refresh") => {
+        "cmd_get_sell_graph_data" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                params: omnibill_core::discovery::commands::GraphParams,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_sell_graph(db_path, omnibill_core::discovery::commands::GraphKind::TopMovers, r.params, None) {
+                    Ok(data) => (200, serde_json::to_string(&data).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_get_product_detail" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "resourceId")]
+                resource_id: String,
+                vertical: Option<String>,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_get_product_detail_guarded(auth_state, bearer, db_path, &r.resource_id, r.vertical, now_ms) {
+                    Ok(detail) => (200, serde_json::to_string(&detail).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_record_purchase_stock_expense" => {
+            match serde_json::from_str::<omnibill_core::posting::PurchaseInput>(args) {
+                Ok(input) => match cmd_record_purchase_stock_expense_guarded(auth_state, bearer, db_path.to_string(), input, now_ms) {
+                    Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_refresh_analytics" => {
             #[derive(serde::Deserialize)]
             struct Req {
                 today: Option<i64>,
             }
-            let req = serde_json::from_str::<Req>(body).unwrap_or(Req { today: None });
+            let req = serde_json::from_str::<Req>(args).unwrap_or(Req { today: None });
             match cmd_refresh_analytics(db_path, req.today) {
                 Ok(rep) => (200, serde_json::to_string(&rep).unwrap_or_default()),
                 Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
             }
         }
-        ("POST", "/api/alerts/generate") => {
+        "cmd_rebuild_analytics" => match cmd_rebuild_analytics_guarded(auth_state, bearer, db_path, now_ms) {
+            Ok(rep) => (200, serde_json::json!({
+                "sales_daily_rows": rep.sales_daily_rows,
+                "sales_heat_rows": rep.sales_heat_rows,
+                "product_stats_updated": rep.product_stats_updated,
+            }).to_string()),
+            Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+        },
+        "cmd_generate_alerts" => {
             #[derive(serde::Deserialize)]
             struct Req {
                 vertical: Option<String>,
                 today: Option<i64>,
             }
-            let req = serde_json::from_str::<Req>(body).unwrap_or(Req {
-                vertical: None,
-                today: None,
-            });
+            let req = serde_json::from_str::<Req>(args).unwrap_or(Req { vertical: None, today: None });
             match cmd_generate_alerts(db_path, req.vertical, req.today) {
                 Ok(rep) => (200, serde_json::to_string(&rep).unwrap_or_default()),
                 Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
             }
         }
-        ("POST", "/api/alerts/list") => {
+        "cmd_list_alerts" => {
             #[derive(serde::Deserialize)]
             struct Req {
                 #[serde(rename = "includeAcknowledged", default)]
                 include_acknowledged: bool,
             }
-            let req = serde_json::from_str::<Req>(body).unwrap_or(Req {
-                include_acknowledged: false,
-            });
+            let req = serde_json::from_str::<Req>(args).unwrap_or(Req { include_acknowledged: false });
             match cmd_list_alerts(db_path, req.include_acknowledged) {
                 Ok(alerts) => (200, serde_json::to_string(&alerts).unwrap_or_default()),
                 Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
             }
         }
-        ("POST", "/api/alerts/acknowledge") => {
+        "cmd_get_discovery_alerts" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                vertical: Option<String>,
+                today: Option<i64>,
+            }
+            let req = serde_json::from_str::<Req>(args).unwrap_or(Req { vertical: None, today: None });
+            match cmd_generate_alerts(db_path, req.vertical, req.today) {
+                Ok(alerts) => (200, serde_json::to_string(&alerts).unwrap_or_default()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        "cmd_acknowledge_alert" => {
             #[derive(serde::Deserialize)]
             struct Req {
                 #[serde(rename = "alertId")]
                 alert_id: i64,
                 today: Option<i64>,
             }
-            match serde_json::from_str::<Req>(body) {
+            match serde_json::from_str::<Req>(args) {
                 Ok(r) => match cmd_acknowledge_alert(db_path, r.alert_id, r.today) {
                     Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/discovery/export") => {
+        "cmd_acknowledge_discovery_alert" => {
             #[derive(serde::Deserialize)]
             struct Req {
-                query: omnibill_core::discovery::query::DiscoveryQuery,
+                #[serde(rename = "alertId")]
+                alert_id: i64,
+                today: Option<i64>,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_acknowledge_alert(db_path, r.alert_id, r.today) {
+                    Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_export_discovery" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                query: DiscoveryQuery,
                 vertical: Option<String>,
                 today: Option<i64>,
                 #[serde(rename = "outDir")]
                 out_dir: Option<String>,
             }
-            match serde_json::from_str::<Req>(body) {
-                Ok(r) => {
-                    match cmd_export_discovery(db_path, r.query, r.vertical, r.today, r.out_dir) {
-                        Ok(path) => (200, serde_json::json!({ "path": path }).to_string()),
-                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
-                    }
-                }
-                Err(e) => (
-                    400,
-                    serde_json::json!({ "error": e.to_string() }).to_string(),
-                ),
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_export_discovery(db_path, r.query, r.vertical, r.today, r.out_dir) {
+                    Ok(path) => (200, serde_json::json!({ "path": path }).to_string()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
-        ("POST", "/api/discovery/day_summary") => {
+        "cmd_day_summary_text" => {
             #[derive(serde::Deserialize)]
             struct Req {
                 vertical: Option<String>,
                 day: Option<i64>,
             }
-            let req = serde_json::from_str::<Req>(body).unwrap_or(Req {
-                vertical: None,
-                day: None,
-            });
+            let req = serde_json::from_str::<Req>(args).unwrap_or(Req { vertical: None, day: None });
             match cmd_day_summary_text(db_path, req.vertical, req.day) {
                 Ok(text) => (200, serde_json::json!({ "summary": text }).to_string()),
                 Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        "cmd_backup_create" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "outPath")]
+                out_path: String,
+                passphrase: Option<String>,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_backup_create_guarded(auth_state, bearer, db_path.to_string(), r.out_path, r.passphrase, now_ms) {
+                    Ok(meta) => (200, serde_json::to_string(&meta).unwrap_or_default()),
+                    Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_backup_restore" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "backupPath")]
+                backup_path: String,
+                passphrase: Option<String>,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => match cmd_backup_restore_guarded(auth_state, bearer, r.backup_path, db_path.to_string(), r.passphrase, now_ms) {
+                    Ok(_summary) => (200, serde_json::json!({ "success": true }).to_string()),
+                    Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+            }
+        }
+        "cmd_print_receipt" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "invoiceNumber")]
+                invoice_number: Option<String>,
+            }
+            let req = serde_json::from_str::<Req>(args).ok();
+            let dummy_data = omnibill_core::hardware::printer::ReceiptData {
+                store_name: "OmniBill Store".into(),
+                address: None,
+                gstin: None,
+                phone: None,
+                trade_name: None,
+                invoice_number: req
+                    .and_then(|r| r.invoice_number)
+                    .unwrap_or_else(|| "INV-001".into()),
+                invoice_date: "2026-10-21".into(),
+                customer_name: None,
+                customer_gstin: None,
+                items: Vec::new(),
+                tax_summary: omnibill_core::hardware::printer::ReceiptTaxSummary {
+                    subtotal_paise: 0,
+                    discount_paise: 0,
+                    taxable_paise: 0,
+                    cgst_paise: 0,
+                    sgst_paise: 0,
+                    igst_paise: 0,
+                    round_off_paise: 0,
+                    total_amount_paise: 0,
+                },
+                upi_qr_string: None,
+                footer_note: None,
+            };
+            match cmd_print_receipt_guarded(
+                auth_state,
+                bearer,
+                dummy_data,
+                omnibill_core::hardware::printer::PaperWidth::Width80mm,
+                now_ms,
+            ) {
+                Ok(bytes) => (
+                    200,
+                    serde_json::json!({ "bytes_len": bytes.len() }).to_string(),
+                ),
+                Err(e) => (500, serde_json::json!({ "error": e }).to_string()),
             }
         }
         _ => (404, serde_json::json!({ "error": "Not Found" }).to_string()),

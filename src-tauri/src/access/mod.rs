@@ -7,12 +7,14 @@ pub mod commands;
 pub mod commands_roles;
 pub mod guard;
 pub mod licence;
+pub mod licence_store;
 pub mod password;
 pub mod permissions;
 pub mod policy;
 pub mod policy_table;
 pub mod role_perms;
 pub mod roles;
+pub mod routes;
 pub mod session;
 pub mod users;
 
@@ -22,7 +24,7 @@ pub use clock_guard::advance_max_seen;
 pub use guard::{
     AppAuthState, AuthContext, GuardContext, GuardError, LicenceFeatureProvider,
     MockAllFeaturesLicensed, MockAllModesAllowed, MockNoFeaturesLicensed, ModeAllowsProvider,
-    authorize, guard_command,
+    RealLicenceModeProvider, StaticModeProvider, authorize, guard_command,
 };
 pub use licence::{
     Licence, LicenceError, LicencePayload, Mode, ModeInputs, Reason, compute_mode,
@@ -38,6 +40,7 @@ pub use role_perms::{
     is_role_editable, reset_role_permissions_impl, set_role_permission_impl,
 };
 pub use roles::{ALL_PERMISSIONS, Role, default_permissions};
+pub use routes::ROUTES;
 pub use session::{Session, SessionError, SessionManager, hash_token};
 pub use users::{
     AuthError, AuthenticatedUser, CreateUserInput, UserRecord, admin_reset_password, authenticate,
