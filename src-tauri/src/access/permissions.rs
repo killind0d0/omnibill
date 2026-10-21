@@ -98,4 +98,51 @@ impl Permission {
             Permission::WholesaleEway => "wholesale_eway",
         }
     }
+
+    pub fn parse_permission(s: &str) -> Option<Self> {
+        match s {
+            "sales_create" => Some(Permission::SalesCreate),
+            "sales_hold_resume" => Some(Permission::SalesHoldResume),
+            "sales_cancel" => Some(Permission::SalesCancel),
+            "discount_override" => Some(Permission::DiscountOverride),
+            "price_override" => Some(Permission::PriceOverride),
+            "payments_collect" => Some(Permission::PaymentsCollect),
+            "credit_limit_override" => Some(Permission::CreditLimitOverride),
+            "products_view" => Some(Permission::ProductsView),
+            "products_edit" => Some(Permission::ProductsEdit),
+            "stock_inward" => Some(Permission::StockInward),
+            "stock_adjust" => Some(Permission::StockAdjust),
+            "customers_view" => Some(Permission::CustomersView),
+            "customers_manage" => Some(Permission::CustomersManage),
+            "reports_basic" => Some(Permission::ReportsBasic),
+            "reports_financial" => Some(Permission::ReportsFinancial),
+            "discovery_view" => Some(Permission::DiscoveryView),
+            "sell_graph_view" => Some(Permission::SellGraphView),
+            "alerts_view" => Some(Permission::AlertsView),
+            "day_close" => Some(Permission::DayClose),
+            "settings_manage" => Some(Permission::SettingsManage),
+            "users_manage" => Some(Permission::UsersManage),
+            "audit_view" => Some(Permission::AuditView),
+            "export_data" => Some(Permission::ExportData),
+            "backup_restore" => Some(Permission::BackupRestore),
+            "print_receipt" => Some(Permission::PrintReceipt),
+            "hospital_clinical" => Some(Permission::HospitalClinical),
+            "hospital_pharmacy_dispense" => Some(Permission::HospitalPharmacyDispense),
+            "hospital_lab" => Some(Permission::HospitalLab),
+            "hospital_billing" => Some(Permission::HospitalBilling),
+            "school_fees_collect" => Some(Permission::SchoolFeesCollect),
+            "school_students_manage" => Some(Permission::SchoolStudentsManage),
+            "wholesale_credit_manage" => Some(Permission::WholesaleCreditManage),
+            "wholesale_eway" => Some(Permission::WholesaleEway),
+            _ => None,
+        }
+    }
+}
+
+impl std::str::FromStr for Permission {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_permission(s).ok_or(())
+    }
 }

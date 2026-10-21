@@ -2,11 +2,13 @@
 
 pub mod audit;
 pub mod commands;
+pub mod commands_roles;
 pub mod guard;
 pub mod password;
 pub mod permissions;
 pub mod policy;
 pub mod policy_table;
+pub mod role_perms;
 pub mod roles;
 pub mod session;
 pub mod users;
@@ -21,6 +23,11 @@ pub use password::{PasswordError, check_strength, hash_password, verify_password
 pub use permissions::Permission;
 pub use policy::*;
 pub use policy_table::{COMMAND_POLICY, CommandPolicy, Feature, find_policy};
+pub use role_perms::{
+    DANGEROUS, OWNER_ONLY_LOCKED, RolePermError, RolePermissionItem, clear_cache,
+    effective_permissions as effective_role_permissions, get_role_permissions_impl,
+    is_role_editable, reset_role_permissions_impl, set_role_permission_impl,
+};
 pub use roles::{ALL_PERMISSIONS, Role, default_permissions};
 pub use session::{Session, SessionError, SessionManager, hash_token};
 pub use users::{

@@ -141,6 +141,37 @@ pub static COMMAND_POLICY: &[CommandPolicy] = &[
         public: false,
         lan_allowed: true,
     },
+    // --- Role Permissions Management (Task L2C) ---
+    CommandPolicy {
+        name: "get_role_permissions",
+        permission: Some(Permission::UsersManage),
+        feature: None,
+        write: true,
+        export: false,
+        print: false,
+        public: false,
+        lan_allowed: true,
+    },
+    CommandPolicy {
+        name: "set_role_permission",
+        permission: Some(Permission::UsersManage),
+        feature: None,
+        write: true,
+        export: false,
+        print: false,
+        public: false,
+        lan_allowed: true,
+    },
+    CommandPolicy {
+        name: "reset_role_permissions",
+        permission: Some(Permission::UsersManage),
+        feature: None,
+        write: true,
+        export: false,
+        print: false,
+        public: false,
+        lan_allowed: true,
+    },
     // --- Schema & Diagnostics ---
     CommandPolicy {
         name: "cmd_run_migrations",

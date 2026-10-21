@@ -12,7 +12,6 @@ fn test_auth_schema_fresh_db_columns_and_integrity() {
     run_migrations(&mut conn, MIGRATIONS).expect("run all migrations");
     let version = get_user_version(&conn).expect("get user_version");
     assert_eq!(version, LATEST_VERSION);
-    assert_eq!(version, 8);
 
     // 1. Assert via PRAGMA table_info that every column exists on app_users
     let mut stmt = conn
@@ -222,9 +221,9 @@ fn test_auth_schema_upgrade_from_previous_migration_data_intact() {
         ],
     ).expect("insert pre-existing row");
 
-    // 3. Run all migrations (upgrades v7 -> v8)
-    run_migrations(&mut conn, MIGRATIONS).expect("migrate from v7 to v8");
-    assert_eq!(get_user_version(&conn).expect("version"), 8);
+    // 3. Run all migrations (upgrades v7 -> latest)
+    run_migrations(&mut conn, MIGRATIONS).expect("migrate to latest");
+    assert_eq!(get_user_version(&conn).expect("version"), LATEST_VERSION);
 
     // 4. Assert pre-existing row survived intact
     let legal_name: String = conn

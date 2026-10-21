@@ -8,8 +8,10 @@ pub mod migration_6;
 pub mod migration_7;
 #[path = "migration_8.rs"]
 pub mod migration_8;
+#[path = "migration_9.rs"]
+pub mod migration_9;
 
-pub const LATEST_VERSION: i32 = 8;
+pub const LATEST_VERSION: i32 = 9;
 
 pub struct Migration {
     pub version: i32,
@@ -57,6 +59,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 8,
         description: "Local auth schema: app_users and app_state",
         sql: migration_8::MIGRATION_8_SQL,
+    },
+    Migration {
+        version: 9,
+        description: "Role permissions table for owner-customized permission overrides",
+        sql: migration_9::MIGRATION_9_SQL,
     },
 ];
 

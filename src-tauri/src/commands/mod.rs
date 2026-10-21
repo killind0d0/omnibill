@@ -921,6 +921,9 @@ generate_handler![
     cmd_backup_create,
     cmd_backup_restore,
     cmd_print_receipt,
+    get_role_permissions,
+    set_role_permission,
+    reset_role_permissions,
 ];
 
 // ============================================================================

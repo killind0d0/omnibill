@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use super::audit::record_auth_event;
 use super::permissions::Permission;
 use super::policy_table::{Feature, find_policy};
-use super::roles::{Role, default_permissions};
+use super::roles::Role;
 use super::session::{SessionError, SessionManager};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,9 +188,9 @@ fn audit_denial(user_or_token: &str, cmd: &str, reason: &str, now_ms: i64) {
 }
 
 /// Resolves effective permissions for a role in a vertical.
-/// Defaults to default_permissions in Task L2A (overridden by role_permissions table in L2C).
+/// Overridden by role_permissions table in Task L2C.
 pub fn effective_permissions(role: Role, vertical: &str) -> Vec<Permission> {
-    default_permissions(role, vertical)
+    super::role_perms::effective_permissions(None, role, vertical)
 }
 
 /// Main authorization guard for all incoming command requests.
