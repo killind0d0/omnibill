@@ -1,6 +1,9 @@
 use rusqlite::{Connection, Result};
 
-pub const LATEST_VERSION: i32 = 4;
+#[path = "migration_5.rs"]
+pub mod migration_5;
+
+pub const LATEST_VERSION: i32 = 5;
 
 pub struct Migration {
     pub version: i32,
@@ -28,6 +31,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 4,
         description: "Lot cost price, transaction price mode, negative stock trigger, and performance indexes",
         sql: MIGRATION_4_SQL,
+    },
+    Migration {
+        version: 5,
+        description: "Brands, supplier linkage, COGS capture, and analytics rollups",
+        sql: migration_5::MIGRATION_5_SQL,
     },
 ];
 
