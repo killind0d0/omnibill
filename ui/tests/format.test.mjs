@@ -132,4 +132,42 @@ assert.throws(() => parseRupeesToPaise('12.505'), /Sub-paisa precision/);
 assert.throws(() => parseRupeesToPaise('abc'), /Invalid/);
 assert.throws(() => parseRupeesToPaise('-3'), /Negative/);
 
+function niceTicks(min, max, targetCount = 5) {
+  if (min >= max) return [min];
+  const span = max - min;
+  const count = Math.max(2, targetCount);
+  const roughStep = Math.max(1, Math.floor(span / count));
+  let magnitude = 1;
+  let temp = roughStep;
+  while (temp >= 10) {
+    temp = Math.floor(temp / 10);
+    magnitude *= 10;
+  }
+  const fraction = roughStep / magnitude;
+  let niceStep = magnitude;
+  if (fraction < 1.5) niceStep = 1 * magnitude;
+  else if (fraction < 3.5) niceStep = 2 * magnitude;
+  else if (fraction < 7.5) niceStep = 5 * magnitude;
+  else niceStep = 10 * magnitude;
+  if (niceStep < 1) niceStep = 1;
+
+  const start = Math.floor(min / niceStep) * niceStep;
+  const ticks = [];
+  let current = start;
+  while (current < max) {
+    ticks.push(current);
+    current += niceStep;
+  }
+  ticks.push(current);
+  return ticks;
+}
+
+// 4. Chart niceTicks unit tests
+const ticks = niceTicks(0, 987, 5);
+assert.equal(ticks[0], 0);
+assert.ok(ticks[ticks.length - 1] >= 987);
+for (let i = 1; i < ticks.length; i++) {
+  assert.ok(ticks[i] > ticks[i - 1], 'Ticks must be strictly ascending integers');
+}
+
 console.log('ALL FRONTEND FORMAT TESTS PASSED');
