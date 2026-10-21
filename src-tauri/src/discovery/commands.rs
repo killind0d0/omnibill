@@ -363,3 +363,99 @@ pub fn cmd_day_summary_text(
     });
     day_summary_text(&conn, &vert, t).map_err(|e| e.to_string())
 }
+
+// ============================================================================
+// Guarded IPC Alert & Export Commands (Batch 3: Alerts & Exports)
+// ============================================================================
+
+/// Guarded execution for generating alerts.
+pub fn cmd_generate_alerts_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    vertical: Option<String>,
+    today: Option<i64>,
+    now_ms: i64,
+) -> Result<GenerateAlertsReport, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_generate_alerts",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_generate_alerts(db_path, vertical, today)
+}
+
+/// Guarded execution for listing alerts.
+pub fn cmd_list_alerts_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    include_acknowledged: bool,
+    now_ms: i64,
+) -> Result<Vec<AlertItem>, String> {
+    let _auth = authorize(&state.as_guard_context(), token, "cmd_list_alerts", now_ms)
+        .map_err(|e| e.to_string())?;
+    cmd_list_alerts(db_path, include_acknowledged)
+}
+
+/// Guarded execution for acknowledging an alert.
+pub fn cmd_acknowledge_alert_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    alert_id: i64,
+    today: Option<i64>,
+    now_ms: i64,
+) -> Result<(), String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_acknowledge_alert",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_acknowledge_alert(db_path, alert_id, today)
+}
+
+/// Guarded execution for discovery export (CSV).
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_export_discovery_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    query: DiscoveryQuery,
+    vertical: Option<String>,
+    today: Option<i64>,
+    out_dir: Option<String>,
+    now_ms: i64,
+) -> Result<String, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_export_discovery",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_export_discovery(db_path, query, vertical, today, out_dir)
+}
+
+/// Guarded execution for day summary text export (WhatsApp text).
+pub fn cmd_day_summary_text_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    vertical: Option<String>,
+    day: Option<i64>,
+    now_ms: i64,
+) -> Result<String, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_day_summary_text",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_day_summary_text(db_path, vertical, day)
+}
