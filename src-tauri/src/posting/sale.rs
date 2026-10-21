@@ -5,7 +5,7 @@ use super::{
     PostedSale, PostedSaleTotals, PostedSaleWithPayments, PostingError, PriceMode, SaleInput,
     SaleWithPaymentsInput,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashMap;
 
 /// Helper to generate a unique lowercase hex ID prefixed with `prefix`.
@@ -49,11 +49,9 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
     let entity_id = match &input.customer {
         Some(cid) => {
             let existing: Option<String> = tx
-                .query_row(
-                    "SELECT id FROM entities WHERE id = ?1",
-                    params![cid],
-                    |r| r.get(0),
-                )
+                .query_row("SELECT id FROM entities WHERE id = ?1", params![cid], |r| {
+                    r.get(0)
+                })
                 .optional()?;
             match existing {
                 Some(id) => id,
@@ -148,17 +146,35 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
     )?;
 
     // Insert transaction_items
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.invoice_date).unwrap_or(0);
     for line in &computation.lines {
         let item_id = generate_id(&tx, "ti")?;
+        let unit_cost: i64 = tx
+            .query_row(
+                "SELECT cost_price_paise FROM resources WHERE id = ?1",
+                params![&line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let line_cogs = if unit_cost > 0 {
+            let mult = (line.quantity_milli as i128)
+                .checked_mul(unit_cost as i128)
+                .ok_or(PostingError::MathOverflow)?;
+            i64::try_from(round_div_i128(mult, 1000)?).map_err(|_| PostingError::MathOverflow)?
+        } else {
+            0
+        };
         tx.execute(
             "INSERT INTO transaction_items (
                 id, transaction_id, resource_id, lot_id, quantity_milli,
                 unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
-                cgst_paise, sgst_paise, igst_paise, line_total_paise
+                cgst_paise, sgst_paise, igst_paise, line_total_paise,
+                cogs_paise, business_day
             ) VALUES (
                 ?1, ?2, ?3, NULL, ?4,
                 ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12
+                ?9, ?10, ?11, ?12,
+                ?13, ?14
             )",
             params![
                 &item_id,
@@ -173,6 +189,8 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
                 line.sgst_paise,
                 line.igst_paise,
                 line.line_total_paise,
+                line_cogs,
+                b_day,
             ],
         )?;
     }
@@ -477,7 +495,39 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
         });
     }
 
-    // 7. Commit transaction
+    // 7. Discovery Hub Rollups
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.invoice_date).unwrap_or(0);
+    let b_hour = crate::discovery::clock::business_hour(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    );
+    for line in &computation.lines {
+        let line_cogs: i64 = tx
+            .query_row(
+                "SELECT COALESCE(SUM(cogs_paise), 0) FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2",
+                params![&tx_id, &line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        crate::discovery::rollup::apply_sale_line(
+            &tx,
+            &line.resource_id,
+            b_day,
+            line.quantity_milli,
+            line.taxable_paise,
+            line_cogs,
+        )?;
+    }
+    crate::discovery::rollup::apply_sale_heat(
+        &tx,
+        b_day,
+        b_hour,
+        computation.totals.taxable_paise,
+    )?;
+
+    // 8. Commit transaction
     tx.commit()?;
 
     Ok(PostedSale {
@@ -539,11 +589,9 @@ pub fn post_sale_with_payments(
     let entity_id = match &input.sale.customer {
         Some(cid) => {
             let existing: Option<String> = tx
-                .query_row(
-                    "SELECT id FROM entities WHERE id = ?1",
-                    params![cid],
-                    |r| r.get(0),
-                )
+                .query_row("SELECT id FROM entities WHERE id = ?1", params![cid], |r| {
+                    r.get(0)
+                })
                 .optional()?;
             match existing {
                 Some(id) => id,
@@ -638,17 +686,35 @@ pub fn post_sale_with_payments(
     )?;
 
     // Insert transaction_items
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.sale.invoice_date).unwrap_or(0);
     for line in &computation.lines {
         let item_id = generate_id(&tx, "ti")?;
+        let unit_cost: i64 = tx
+            .query_row(
+                "SELECT cost_price_paise FROM resources WHERE id = ?1",
+                params![&line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let line_cogs = if unit_cost > 0 {
+            let mult = (line.quantity_milli as i128)
+                .checked_mul(unit_cost as i128)
+                .ok_or(PostingError::MathOverflow)?;
+            i64::try_from(round_div_i128(mult, 1000)?).map_err(|_| PostingError::MathOverflow)?
+        } else {
+            0
+        };
         tx.execute(
             "INSERT INTO transaction_items (
                 id, transaction_id, resource_id, lot_id, quantity_milli,
                 unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
-                cgst_paise, sgst_paise, igst_paise, line_total_paise
+                cgst_paise, sgst_paise, igst_paise, line_total_paise,
+                cogs_paise, business_day
             ) VALUES (
                 ?1, ?2, ?3, NULL, ?4,
                 ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12
+                ?9, ?10, ?11, ?12,
+                ?13, ?14
             )",
             params![
                 &item_id,
@@ -663,6 +729,8 @@ pub fn post_sale_with_payments(
                 line.sgst_paise,
                 line.igst_paise,
                 line.line_total_paise,
+                line_cogs,
+                b_day,
             ],
         )?;
     }
@@ -812,7 +880,9 @@ pub fn post_sale_with_payments(
         )?;
 
         let lot_ids: Vec<String> = lots_stmt
-            .query_map(params![&resource_id, &input.sale.invoice_date], |r| r.get(0))?
+            .query_map(params![&resource_id, &input.sale.invoice_date], |r| {
+                r.get(0)
+            })?
             .collect::<Result<Vec<String>, _>>()?;
 
         let mut remaining = needed_milli;
@@ -940,7 +1010,8 @@ pub fn post_sale_with_payments(
     for tender in &input.payments {
         let pay_id = generate_id(&tx, "pay")?;
         let mode_str = tender.mode.as_str();
-        let (_pay_series, pay_number) = allocate_invoice_number(&tx, "PAY", &input.sale.invoice_date)?;
+        let (_pay_series, pay_number) =
+            allocate_invoice_number(&tx, "PAY", &input.sale.invoice_date)?;
 
         tx.execute(
             "INSERT INTO payments (
@@ -1038,6 +1109,38 @@ pub fn post_sale_with_payments(
         });
     }
 
+    // Discovery Hub Rollups
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.sale.invoice_date).unwrap_or(0);
+    let b_hour = crate::discovery::clock::business_hour(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    );
+    for line in &computation.lines {
+        let line_cogs: i64 = tx
+            .query_row(
+                "SELECT COALESCE(SUM(cogs_paise), 0) FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2",
+                params![&tx_id, &line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        crate::discovery::rollup::apply_sale_line(
+            &tx,
+            &line.resource_id,
+            b_day,
+            line.quantity_milli,
+            line.taxable_paise,
+            line_cogs,
+        )?;
+    }
+    crate::discovery::rollup::apply_sale_heat(
+        &tx,
+        b_day,
+        b_hour,
+        computation.totals.taxable_paise,
+    )?;
+
     // Single atomic commit for invoice + tenders
     tx.commit()?;
 
@@ -1065,7 +1168,7 @@ pub fn post_sale_with_payments(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::migrations::{MIGRATIONS, run_migrations};
+    use crate::database::migrations::{run_migrations, MIGRATIONS};
     use crate::database::queries::verify_ledger;
     use crate::posting::{LineInput, PaymentTenderInput, PriceMode};
     use std::fs;
@@ -1700,12 +1803,10 @@ mod tests {
             params![&sale.transaction_id],
         );
         assert!(res_le.is_err());
-        assert!(
-            res_le
-                .unwrap_err()
-                .to_string()
-                .contains("IMMUTABILITY_RULE_BROKEN")
-        );
+        assert!(res_le
+            .unwrap_err()
+            .to_string()
+            .contains("IMMUTABILITY_RULE_BROKEN"));
 
         // Attempting to UPDATE transaction total must fail with IMMUTABILITY_RULE_BROKEN
         let res_tx = conn.execute(
@@ -1713,12 +1814,10 @@ mod tests {
             params![&sale.transaction_id],
         );
         assert!(res_tx.is_err());
-        assert!(
-            res_tx
-                .unwrap_err()
-                .to_string()
-                .contains("IMMUTABILITY_RULE_BROKEN")
-        );
+        assert!(res_tx
+            .unwrap_err()
+            .to_string()
+            .contains("IMMUTABILITY_RULE_BROKEN"));
     }
 
     // Test 20 protects: No float rule in accounting code (static scan of posting module).
@@ -1775,7 +1874,8 @@ mod tests {
             "INSERT INTO resource_lots (id, resource_id, batch_number, mrp_paise)
              VALUES ('lot_cogs_1', 'res_cogs', 'B-01', 10000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
@@ -1818,7 +1918,11 @@ mod tests {
 
         // Verify ledger consistency
         let disc = crate::database::queries::verify_ledger(&conn).unwrap();
-        assert!(disc.is_empty(), "Ledger must be balanced after COGS posting: {:?}", disc);
+        assert!(
+            disc.is_empty(),
+            "Ledger must be balanced after COGS posting: {:?}",
+            disc
+        );
     }
 
     #[test]
@@ -1836,7 +1940,8 @@ mod tests {
             "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
              VALUES ('lot_exp', 'res_fefo', 'BATCH-EXP', '2026-03-31', 5000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
              VALUES ('sm_fefo_1', 'res_fefo', 'lot_exp', NULL, 'PURCHASE', 1000)",
@@ -1848,7 +1953,8 @@ mod tests {
             "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
              VALUES ('lot_soon', 'res_fefo', 'BATCH-SOON', '2026-06-30', 5000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
              VALUES ('sm_fefo_2', 'res_fefo', 'lot_soon', NULL, 'PURCHASE', 1000)",
@@ -1860,7 +1966,8 @@ mod tests {
             "INSERT INTO resource_lots (id, resource_id, batch_number, expiry_date, mrp_paise)
              VALUES ('lot_later', 'res_fefo', 'BATCH-LATER', '2026-12-31', 5000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
              VALUES ('sm_fefo_3', 'res_fefo', 'lot_later', NULL, 'PURCHASE', 1000)",
@@ -1887,19 +1994,26 @@ mod tests {
         let sale = post_sale(&mut conn, &sale_input).unwrap();
 
         // Verify that deduction happened on lot_soon
-        let deducted_lot: String = conn.query_row(
-            "SELECT lot_id FROM stock_movements WHERE transaction_id = ?1 AND reason = 'SALE'",
-            params![&sale.transaction_id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(deducted_lot, "lot_soon", "FEFO must select earliest non-expired batch");
+        let deducted_lot: String = conn
+            .query_row(
+                "SELECT lot_id FROM stock_movements WHERE transaction_id = ?1 AND reason = 'SALE'",
+                params![&sale.transaction_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            deducted_lot, "lot_soon",
+            "FEFO must select earliest non-expired batch"
+        );
 
         // Verify expired lot still has 1000 milli
-        let exp_bal: i64 = conn.query_row(
-            "SELECT SUM(quantity_delta_milli) FROM stock_movements WHERE lot_id = 'lot_exp'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let exp_bal: i64 = conn
+            .query_row(
+                "SELECT SUM(quantity_delta_milli) FROM stock_movements WHERE lot_id = 'lot_exp'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(exp_bal, 1000, "Expired lot must not be sold");
     }
 
@@ -1936,21 +2050,28 @@ mod tests {
             ],
         };
 
-        let result = post_sale_with_payments(&mut conn, &input).expect("Atomic sale + payments must succeed");
+        let result = post_sale_with_payments(&mut conn, &input)
+            .expect("Atomic sale + payments must succeed");
         assert_eq!(result.sale.totals.total_amount_paise, 11800);
         assert_eq!(result.payment_ids.len(), 2);
 
         // Verify allocations
-        let alloc_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM payment_allocations WHERE transaction_id = ?1",
-            params![&result.sale.transaction_id],
-            |r| r.get(0),
-        ).unwrap();
+        let alloc_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM payment_allocations WHERE transaction_id = ?1",
+                params![&result.sale.transaction_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(alloc_count, 2);
 
         // Verify ledger balance globally
         let disc = verify_ledger(&conn).unwrap();
-        assert!(disc.is_empty(), "Ledger must be completely balanced: {:?}", disc);
+        assert!(
+            disc.is_empty(),
+            "Ledger must be completely balanced: {:?}",
+            disc
+        );
     }
 
     #[test]
@@ -1958,49 +2079,61 @@ mod tests {
         let mut conn = setup_test_db();
 
         // 1. Post exclusive sale
-        let s_excl = post_sale(&mut conn, &SaleInput {
-            invoice_date: "2026-05-16".to_string(),
-            seller_state_code: "27".to_string(),
-            place_of_supply_state_code: "27".to_string(),
-            customer: None,
-            price_mode: PriceMode::Exclusive,
-            lines: vec![LineInput {
-                resource_id: "res_tracked_1".to_string(),
-                quantity_milli: 1000,
-                unit_price_paise: 10000,
-                discount_paise: 0,
-                tax_rate_bps: 1800,
-            }],
-        }).unwrap();
+        let s_excl = post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2026-05-16".to_string(),
+                seller_state_code: "27".to_string(),
+                place_of_supply_state_code: "27".to_string(),
+                customer: None,
+                price_mode: PriceMode::Exclusive,
+                lines: vec![LineInput {
+                    resource_id: "res_tracked_1".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 10000,
+                    discount_paise: 0,
+                    tax_rate_bps: 1800,
+                }],
+            },
+        )
+        .unwrap();
 
-        let mode_excl: String = conn.query_row(
-            "SELECT price_mode FROM transactions WHERE id = ?1",
-            params![&s_excl.transaction_id],
-            |r| r.get(0),
-        ).unwrap();
+        let mode_excl: String = conn
+            .query_row(
+                "SELECT price_mode FROM transactions WHERE id = ?1",
+                params![&s_excl.transaction_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(mode_excl, "EXCLUSIVE");
 
         // 2. Post inclusive sale
-        let s_incl = post_sale(&mut conn, &SaleInput {
-            invoice_date: "2026-05-16".to_string(),
-            seller_state_code: "27".to_string(),
-            place_of_supply_state_code: "27".to_string(),
-            customer: None,
-            price_mode: PriceMode::Inclusive,
-            lines: vec![LineInput {
-                resource_id: "res_tracked_1".to_string(),
-                quantity_milli: 1000,
-                unit_price_paise: 11800,
-                discount_paise: 0,
-                tax_rate_bps: 1800,
-            }],
-        }).unwrap();
+        let s_incl = post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2026-05-16".to_string(),
+                seller_state_code: "27".to_string(),
+                place_of_supply_state_code: "27".to_string(),
+                customer: None,
+                price_mode: PriceMode::Inclusive,
+                lines: vec![LineInput {
+                    resource_id: "res_tracked_1".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 11800,
+                    discount_paise: 0,
+                    tax_rate_bps: 1800,
+                }],
+            },
+        )
+        .unwrap();
 
-        let mode_incl: String = conn.query_row(
-            "SELECT price_mode FROM transactions WHERE id = ?1",
-            params![&s_incl.transaction_id],
-            |r| r.get(0),
-        ).unwrap();
+        let mode_incl: String = conn
+            .query_row(
+                "SELECT price_mode FROM transactions WHERE id = ?1",
+                params![&s_incl.transaction_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(mode_incl, "INCLUSIVE");
     }
 
@@ -2027,20 +2160,24 @@ mod tests {
             [],
         ).unwrap();
 
-        let sale = post_sale(&mut conn, &SaleInput {
-            invoice_date: "2026-05-18".to_string(),
-            seller_state_code: "27".to_string(),
-            place_of_supply_state_code: "27".to_string(),
-            customer: None,
-            price_mode: PriceMode::Exclusive,
-            lines: vec![LineInput {
-                resource_id: "res_batch".to_string(),
-                quantity_milli: 1000,
-                unit_price_paise: 10000,
-                discount_paise: 0,
-                tax_rate_bps: 0,
-            }],
-        }).unwrap();
+        let sale = post_sale(
+            &mut conn,
+            &SaleInput {
+                invoice_date: "2026-05-18".to_string(),
+                seller_state_code: "27".to_string(),
+                place_of_supply_state_code: "27".to_string(),
+                customer: None,
+                price_mode: PriceMode::Exclusive,
+                lines: vec![LineInput {
+                    resource_id: "res_batch".to_string(),
+                    quantity_milli: 1000,
+                    unit_price_paise: 10000,
+                    discount_paise: 0,
+                    tax_rate_bps: 0,
+                }],
+            },
+        )
+        .unwrap();
 
         // COGS should be 7500 (from lot_a), not 4000 (from resource master)!
         let cogs: i64 = conn.query_row(

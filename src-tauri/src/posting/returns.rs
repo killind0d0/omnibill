@@ -1,7 +1,7 @@
 use super::series::allocate_invoice_number;
 use super::tax::{compute_sale, round_div_i128};
 use super::{LineInput, PostedSaleTotals, PostingError, PriceMode, SaleInput};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -185,8 +185,12 @@ pub fn post_sale_return(
         if line.quantity_milli <= 0 {
             return Err(PostingError::InvalidQuantity(line.quantity_milli));
         }
-        let entry = requested_per_resource.entry(line.resource_id.clone()).or_insert(0);
-        *entry = entry.checked_add(line.quantity_milli).ok_or(PostingError::MathOverflow)?;
+        let entry = requested_per_resource
+            .entry(line.resource_id.clone())
+            .or_insert(0);
+        *entry = entry
+            .checked_add(line.quantity_milli)
+            .ok_or(PostingError::MathOverflow)?;
     }
 
     for (resource_id, requested_milli) in &requested_per_resource {
@@ -292,17 +296,48 @@ pub fn post_sale_return(
     )?;
 
     // Insert transaction_items
+    // Insert transaction_items
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.return_date).unwrap_or(0);
     for line in &computation.lines {
         let item_id = generate_id(&tx, "ti")?;
+        let orig_cogs: i64 = tx
+            .query_row(
+                "SELECT cogs_paise FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2 LIMIT 1",
+                params![&input.original_transaction_id, &line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let ret_cogs = if orig_cogs > 0 {
+            let orig_qty: i64 = tx
+                .query_row(
+                    "SELECT quantity_milli FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2 LIMIT 1",
+                    params![&input.original_transaction_id, &line.resource_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(line.quantity_milli);
+            if orig_qty > 0 {
+                let mult = (orig_cogs as i128)
+                    .checked_mul(line.quantity_milli as i128)
+                    .ok_or(PostingError::MathOverflow)?;
+                i64::try_from(round_div_i128(mult, orig_qty as i128)?).unwrap_or(orig_cogs)
+            } else {
+                orig_cogs
+            }
+        } else {
+            0
+        };
+
         tx.execute(
             "INSERT INTO transaction_items (
                 id, transaction_id, resource_id, lot_id, quantity_milli,
                 unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
-                cgst_paise, sgst_paise, igst_paise, line_total_paise
+                cgst_paise, sgst_paise, igst_paise, line_total_paise,
+                cogs_paise, business_day
             ) VALUES (
                 ?1, ?2, ?3, NULL, ?4,
                 ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12
+                ?9, ?10, ?11, ?12,
+                ?13, ?14
             )",
             params![
                 &item_id,
@@ -317,6 +352,8 @@ pub fn post_sale_return(
                 line.sgst_paise,
                 line.igst_paise,
                 line.line_total_paise,
+                ret_cogs,
+                b_day,
             ],
         )?;
     }
@@ -607,6 +644,26 @@ pub fn post_sale_return(
         });
     }
 
+    // Discovery Hub Rollups
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.return_date).unwrap_or(0);
+    for line in &computation.lines {
+        let ret_cogs: i64 = tx
+            .query_row(
+                "SELECT COALESCE(SUM(cogs_paise), 0) FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2",
+                params![&tx_id, &line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        crate::discovery::rollup::apply_return_line(
+            &tx,
+            &line.resource_id,
+            b_day,
+            line.quantity_milli,
+            line.taxable_paise,
+            ret_cogs,
+        )?;
+    }
+
     tx.commit()?;
 
     Ok(PostedReturn {
@@ -623,6 +680,110 @@ pub fn post_sale_return(
             total_amount_paise: computation.totals.total_amount_paise,
         },
     })
+}
+
+/// Cancels a POSTED sales invoice: marks status as CANCELLED, compensates stock movements,
+/// posts reversing double-entry ledger rows, and updates Discovery Hub rollups.
+pub fn cancel_posted_sale(conn: &mut Connection, transaction_id: &str) -> Result<(), PostingError> {
+    let recursive_triggers: i64 = conn.query_row("PRAGMA recursive_triggers", [], |r| r.get(0))?;
+    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+
+    if recursive_triggers != 1 || foreign_keys != 1 {
+        return Err(PostingError::InsecureConnection {
+            recursive_triggers,
+            foreign_keys,
+        });
+    }
+
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+    let (status, tx_type): (String, String) = tx.query_row(
+        "SELECT status, transaction_type FROM transactions WHERE id = ?1",
+        params![transaction_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    if status != "POSTED" {
+        return Err(PostingError::InvalidOriginalTransaction(format!(
+            "Transaction status is {}, expected POSTED",
+            status
+        )));
+    }
+    if tx_type != "SALE" {
+        return Err(PostingError::InvalidOriginalTransaction(format!(
+            "Transaction type is {}, expected SALE",
+            tx_type
+        )));
+    }
+
+    let return_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM transactions WHERE original_transaction_id = ?1 AND status = 'POSTED'",
+        params![transaction_id],
+        |r| r.get(0),
+    )?;
+    if return_count > 0 {
+        return Err(PostingError::InvalidOriginalTransaction(
+            "Cannot cancel sale that already has active returns".to_string(),
+        ));
+    }
+
+    // Compensate stock movements
+    let sm_rows: Vec<(String, Option<String>, i64)> = {
+        let mut sm_stmt = tx.prepare(
+            "SELECT resource_id, lot_id, ABS(quantity_delta_milli)
+             FROM stock_movements
+             WHERE transaction_id = ?1 AND quantity_delta_milli < 0",
+        )?;
+        sm_stmt
+            .query_map(params![transaction_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    for (res_id, lot_id, qty) in sm_rows {
+        let sm_id = generate_id(&tx, "sm")?;
+        tx.execute(
+            "INSERT INTO stock_movements (id, resource_id, lot_id, transaction_id, reason, quantity_delta_milli)
+             VALUES (?1, ?2, ?3, ?4, 'ADJUSTMENT', ?5)",
+            params![&sm_id, &res_id, &lot_id, transaction_id, qty],
+        )?;
+    }
+
+    // Reverse ledger entries (swapping debits and credits)
+    let le_rows: Vec<(String, i64, i64, String)> = {
+        let mut le_stmt = tx.prepare(
+            "SELECT account_id, debit_paise, credit_paise, narration
+             FROM ledger_entries
+             WHERE transaction_id = ?1",
+        )?;
+        le_stmt
+            .query_map(params![transaction_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    for (account_id, debit, credit, narration) in le_rows {
+        let le_id = generate_id(&tx, "le")?;
+        tx.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
+            params![&le_id, transaction_id, &account_id, credit, debit, format!("Cancel: {}", narration)],
+        )?;
+    }
+
+    // Update transaction status from POSTED to CANCELLED
+    tx.execute(
+        "UPDATE transactions SET status = 'CANCELLED' WHERE id = ?1",
+        params![transaction_id],
+    )?;
+
+    // Discovery Hub Rollup reversal
+    crate::discovery::rollup::apply_cancellation(&tx, transaction_id)?;
+
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn post_purchase_return(
@@ -697,8 +858,12 @@ pub fn post_purchase_return(
         if line.quantity_milli <= 0 {
             return Err(PostingError::InvalidQuantity(line.quantity_milli));
         }
-        let entry = requested_per_resource.entry(line.resource_id.clone()).or_insert(0);
-        *entry = entry.checked_add(line.quantity_milli).ok_or(PostingError::MathOverflow)?;
+        let entry = requested_per_resource
+            .entry(line.resource_id.clone())
+            .or_insert(0);
+        *entry = entry
+            .checked_add(line.quantity_milli)
+            .ok_or(PostingError::MathOverflow)?;
     }
 
     for (resource_id, requested_milli) in &requested_per_resource {
@@ -804,17 +969,48 @@ pub fn post_purchase_return(
     )?;
 
     // Insert transaction_items
+    // Insert transaction_items
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.return_date).unwrap_or(0);
     for line in &computation.lines {
         let item_id = generate_id(&tx, "ti")?;
+        let orig_cogs: i64 = tx
+            .query_row(
+                "SELECT cogs_paise FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2 LIMIT 1",
+                params![&input.original_transaction_id, &line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let ret_cogs = if orig_cogs > 0 {
+            let orig_qty: i64 = tx
+                .query_row(
+                    "SELECT quantity_milli FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2 LIMIT 1",
+                    params![&input.original_transaction_id, &line.resource_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(line.quantity_milli);
+            if orig_qty > 0 {
+                let mult = (orig_cogs as i128)
+                    .checked_mul(line.quantity_milli as i128)
+                    .ok_or(PostingError::MathOverflow)?;
+                i64::try_from(round_div_i128(mult, orig_qty as i128)?).unwrap_or(orig_cogs)
+            } else {
+                orig_cogs
+            }
+        } else {
+            0
+        };
+
         tx.execute(
             "INSERT INTO transaction_items (
                 id, transaction_id, resource_id, lot_id, quantity_milli,
                 unit_price_paise, discount_paise, taxable_paise, tax_rate_bps,
-                cgst_paise, sgst_paise, igst_paise, line_total_paise
+                cgst_paise, sgst_paise, igst_paise, line_total_paise,
+                cogs_paise, business_day
             ) VALUES (
                 ?1, ?2, ?3, NULL, ?4,
                 ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12
+                ?9, ?10, ?11, ?12,
+                ?13, ?14
             )",
             params![
                 &item_id,
@@ -829,6 +1025,8 @@ pub fn post_purchase_return(
                 line.sgst_paise,
                 line.igst_paise,
                 line.line_total_paise,
+                ret_cogs,
+                b_day,
             ],
         )?;
     }
@@ -1029,6 +1227,26 @@ pub fn post_purchase_return(
         });
     }
 
+    // Discovery Hub Rollups
+    let b_day = crate::discovery::clock::parse_date_to_day(&input.return_date).unwrap_or(0);
+    for line in &computation.lines {
+        let ret_cogs: i64 = tx
+            .query_row(
+                "SELECT COALESCE(SUM(cogs_paise), 0) FROM transaction_items WHERE transaction_id = ?1 AND resource_id = ?2",
+                params![&tx_id, &line.resource_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        crate::discovery::rollup::apply_return_line(
+            &tx,
+            &line.resource_id,
+            b_day,
+            line.quantity_milli,
+            line.taxable_paise,
+            ret_cogs,
+        )?;
+    }
+
     tx.commit()?;
 
     Ok(PostedReturn {
@@ -1050,7 +1268,7 @@ pub fn post_purchase_return(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::migrations::{MIGRATIONS, run_migrations};
+    use crate::database::migrations::{run_migrations, MIGRATIONS};
     use crate::database::queries::verify_ledger;
     use crate::posting::post_sale;
 
