@@ -28,8 +28,9 @@ import { ReportsDashboard } from './pages/ReportsDashboard';
 import { LoginScreen, UserSession, BusinessType } from './components/auth/LoginScreen';
 import { ShiftSettlementModal } from './components/pos/ShiftSettlementModal';
 import { posSound } from './lib/sound';
+import { DiscoveryPage } from './features/discovery/DiscoveryPage';
 
-export type AppRoute = 'POS' | 'VERTICALS' | 'ITEM_MASTER' | 'ENTITY_LEDGER' | 'REPORTS';
+export type AppRoute = 'POS' | 'VERTICALS' | 'ITEM_MASTER' | 'ENTITY_LEDGER' | 'REPORTS' | 'DISCOVERY';
 
 export const App: React.FC = () => {
   // Session State
@@ -113,33 +114,32 @@ export const App: React.FC = () => {
       const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       const isInput = targetTag === 'input' || targetTag === 'textarea' || targetTag === 'select';
 
-      // F8: POS Invoicing
-      if (e.key === 'F8') {
-        e.preventDefault();
-        setCurrentRoute('POS');
+      // Retail-specific shortcuts (active only when logged into Retail Supermarket)
+      if (session.businessType === 'RETAIL') {
+        // F8: POS Invoicing
+        if (e.key === 'F8') {
+          e.preventDefault();
+          setCurrentRoute('POS');
+        }
+        // F10: Item Master
+        else if (e.key === 'F10') {
+          e.preventDefault();
+          setCurrentRoute('ITEM_MASTER');
+        }
+        // F11: Entity Ledger Statement
+        else if (e.key === 'F11') {
+          e.preventDefault();
+          setCurrentRoute('ENTITY_LEDGER');
+        }
+        // F12: Reports Dashboard
+        else if (e.key === 'F12') {
+          e.preventDefault();
+          setCurrentRoute('REPORTS');
+        }
       }
-      // F10: Item Master
-      else if (e.key === 'F10') {
-        e.preventDefault();
-        setCurrentRoute('ITEM_MASTER');
-      }
-      // F11: Entity Ledger Statement
-      else if (e.key === 'F11') {
-        e.preventDefault();
-        setCurrentRoute('ENTITY_LEDGER');
-      }
-      // F12: Reports Dashboard
-      else if (e.key === 'F12') {
-        e.preventDefault();
-        setCurrentRoute('REPORTS');
-      }
-      // Alt+V: Multi-Vertical Hub
-      else if (e.altKey && (e.key === 'v' || e.key === 'V')) {
-        e.preventDefault();
-        setCurrentRoute('VERTICALS');
-      }
+
       // Alt+H or ?: Help toggle (when not typing in input)
-      else if (e.altKey && (e.key === 'h' || e.key === 'H')) {
+      if (e.altKey && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault();
         setShowNavHelp((prev) => !prev);
       }
@@ -237,128 +237,145 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Navigation Tabs */}
+        {/* Navigation Tabs - Strictly Isolated by Business Type */}
         <nav className="flex items-center bg-slate-950/80 p-1 rounded-xl border border-slate-800/80 space-x-1">
-          {/* POS Invoicing (Primary for Retail, accessible for all) */}
-          <button
-            onClick={() => setCurrentRoute('POS')}
-            className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              currentRoute === 'POS'
-                ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/40'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-            title="Lightning POS (F8)"
-          >
-            <ShoppingCart className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Quick POS</span>
-            <kbd
-              className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                currentRoute === 'POS' ? 'bg-blue-700 text-blue-100' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              F8
-            </kbd>
-          </button>
+          {session.businessType === 'RETAIL' && (
+            <>
+              {/* POS Invoicing */}
+              <button
+                onClick={() => setCurrentRoute('POS')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'POS'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Lightning POS (F8)"
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Quick POS</span>
+                <kbd
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
+                    currentRoute === 'POS' ? 'bg-blue-700 text-blue-100' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  F8
+                </kbd>
+              </button>
 
-          {/* Industry Hub & Verticals (Wholesale / School / Hospital) */}
-          <button
-            onClick={() => setCurrentRoute('VERTICALS')}
-            className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              currentRoute === 'VERTICALS'
-                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-            title="Industry Verticals: Retail, Wholesale, School, Hospital (Alt+V)"
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">
-              {session.businessType === 'RETAIL'
-                ? 'Industry Hub'
-                : session.businessType === 'WHOLESALE'
-                ? 'B2B Invoicing'
-                : session.businessType === 'SCHOOL'
-                ? 'Fee Collection'
-                : 'Clinical Billing'}
-            </span>
-            <kbd
-              className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                currentRoute === 'VERTICALS'
-                  ? 'bg-indigo-700 text-indigo-100'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              Alt+V
-            </kbd>
-          </button>
+              {/* Item Master */}
+              <button
+                onClick={() => setCurrentRoute('ITEM_MASTER')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'ITEM_MASTER'
+                    ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Item & Inventory Master (F10)"
+              >
+                <Package className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Items</span>
+                <kbd
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
+                    currentRoute === 'ITEM_MASTER'
+                      ? 'bg-emerald-700 text-emerald-100'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  F10
+                </kbd>
+              </button>
 
-          {/* Item Master */}
-          <button
-            onClick={() => setCurrentRoute('ITEM_MASTER')}
-            className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              currentRoute === 'ITEM_MASTER'
-                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/40'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-            title="Item & Inventory Master (F10)"
-          >
-            <Package className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Items</span>
-            <kbd
-              className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                currentRoute === 'ITEM_MASTER'
-                  ? 'bg-emerald-700 text-emerald-100'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              F10
-            </kbd>
-          </button>
+              {/* Entity & Ledger */}
+              <button
+                onClick={() => setCurrentRoute('ENTITY_LEDGER')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'ENTITY_LEDGER'
+                    ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Entity Directory & Ledger Statement (F11)"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Parties</span>
+                <kbd
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
+                    currentRoute === 'ENTITY_LEDGER'
+                      ? 'bg-purple-700 text-purple-100'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  F11
+                </kbd>
+              </button>
 
-          {/* Entity & Ledger */}
-          <button
-            onClick={() => setCurrentRoute('ENTITY_LEDGER')}
-            className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              currentRoute === 'ENTITY_LEDGER'
-                ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/40'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-            title="Entity Directory & Ledger Statement (F11)"
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Parties</span>
-            <kbd
-              className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                currentRoute === 'ENTITY_LEDGER'
-                  ? 'bg-purple-700 text-purple-100'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              F11
-            </kbd>
-          </button>
+              {/* Reports Dashboard */}
+              <button
+                onClick={() => setCurrentRoute('REPORTS')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'REPORTS'
+                    ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Audit & Financial Reports Dashboard (F12)"
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Reports</span>
+                <kbd
+                  className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
+                    currentRoute === 'REPORTS'
+                      ? 'bg-amber-700 text-amber-100'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  F12
+                </kbd>
+              </button>
 
-          {/* Reports Dashboard */}
-          <button
-            onClick={() => setCurrentRoute('REPORTS')}
-            className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              currentRoute === 'REPORTS'
-                ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/40'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-            title="Audit & Financial Reports Dashboard (F12)"
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Reports</span>
-            <kbd
-              className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                currentRoute === 'REPORTS'
-                  ? 'bg-amber-700 text-amber-100'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              F12
-            </kbd>
-          </button>
+              {/* Discovery Hub */}
+              <button
+                onClick={() => setCurrentRoute('DISCOVERY')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'DISCOVERY'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Inventory Discovery Hub & Sorting Analytics"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Discovery Hub</span>
+              </button>
+            </>
+          )}
+
+          {session.businessType === 'SCHOOL' && (
+            <div className="flex items-center space-x-2 px-3 py-1 text-xs">
+              <div className="flex items-center space-x-1.5 font-bold text-amber-300">
+                <GraduationCap className="w-4 h-4 text-amber-400" />
+                <span>School ERP & Student Billing Suite</span>
+              </div>
+              <span className="text-[11px] text-slate-400 hidden xl:inline">
+                • Student Records • Month-Wise Fee Rules • Defaulters Engine • Editable Bill
+              </span>
+            </div>
+          )}
+
+          {session.businessType === 'WHOLESALE' && (
+            <div className="flex items-center space-x-2 px-3 py-1 text-xs">
+              <div className="flex items-center space-x-1.5 font-bold text-blue-300">
+                <Building2 className="w-4 h-4 text-blue-400" />
+                <span>Wholesale & B2B Distribution Invoicing</span>
+              </div>
+            </div>
+          )}
+
+          {session.businessType === 'HOSPITAL' && (
+            <div className="flex items-center space-x-2 px-3 py-1 text-xs">
+              <div className="flex items-center space-x-1.5 font-bold text-rose-300">
+                <HeartPulse className="w-4 h-4 text-rose-400" />
+                <span>Hospital & Clinical Billing Suite</span>
+              </div>
+            </div>
+          )}
         </nav>
 
         {/* Global Controls: Shift Settlement, Daylight Theme, Sound, Shortcuts, Switch Store */}
@@ -429,42 +446,46 @@ export const App: React.FC = () => {
       </header>
 
       {/* Navigation Shortcuts Helper Bar (Expandable) */}
+      {/* Navigation Shortcuts Helper Bar (Expandable) */}
       {showNavHelp && (
         <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 flex items-center justify-between text-xs text-slate-300 select-none animate-in fade-in duration-100">
           <div className="flex items-center space-x-4 flex-wrap">
             <span className="font-bold text-blue-400 flex items-center gap-1">
               <Command className="w-3.5 h-3.5" /> Hotkeys:
             </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
-                F8
-              </kbd>{' '}
-              POS
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
-                Alt+V
-              </kbd>{' '}
-              Industry Mode
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
-                F10
-              </kbd>{' '}
-              Item Master
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
-                F11
-              </kbd>{' '}
-              Entity Ledger
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
-                F12
-              </kbd>{' '}
-              Reports
-            </span>
+            {session.businessType === 'RETAIL' && (
+              <>
+                <span>
+                  <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
+                    F8
+                  </kbd>{' '}
+                  POS
+                </span>
+                <span>
+                  <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
+                    F10
+                  </kbd>{' '}
+                  Item Master
+                </span>
+                <span>
+                  <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
+                    F11
+                  </kbd>{' '}
+                  Entity Ledger
+                </span>
+                <span>
+                  <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
+                    F12
+                  </kbd>{' '}
+                  Reports
+                </span>
+              </>
+            )}
+            {session.businessType === 'SCHOOL' && (
+              <span className="text-amber-300 font-medium">
+                🎓 School ERP Mode (Class × Month Fee Engine • 2-Way Auto-Fill • Editable Final Bill • Defaulters & Reports)
+              </span>
+            )}
             <span>
               <kbd className="px-1.5 py-0.5 bg-slate-950 border border-slate-700 rounded text-slate-300 font-mono text-[10px]">
                 Alt+Z
@@ -501,48 +522,57 @@ export const App: React.FC = () => {
 
       {/* Main View Router Outlet - Preserves State on Tab Switch */}
       <main className="flex-1 flex overflow-hidden relative">
-        <div
-          className={`h-full w-full flex-1 flex overflow-hidden ${
-            currentRoute === 'POS' ? '' : 'hidden'
-          }`}
-        >
-          <LightningPOS />
-        </div>
+        {session.businessType !== 'RETAIL' ? (
+          <div className="h-full w-full flex-1 flex overflow-hidden">
+            <VerticalBillingApp
+              initialVertical={session.businessType}
+              lockedVertical={session.businessType}
+              hideHeader={true}
+            />
+          </div>
+        ) : (
+          <>
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden ${
+                currentRoute === 'POS' ? '' : 'hidden'
+              }`}
+            >
+              <LightningPOS />
+            </div>
 
-        <div
-          className={`h-full w-full flex-1 flex overflow-hidden ${
-            currentRoute === 'VERTICALS' ? '' : 'hidden'
-          }`}
-        >
-          <VerticalBillingApp
-            initialVertical={session.businessType}
-            onNavigateHome={() => setCurrentRoute('POS')}
-          />
-        </div>
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden ${
+                currentRoute === 'ITEM_MASTER' ? '' : 'hidden'
+              }`}
+            >
+              <ItemMaster />
+            </div>
 
-        <div
-          className={`h-full w-full flex-1 flex overflow-hidden ${
-            currentRoute === 'ITEM_MASTER' ? '' : 'hidden'
-          }`}
-        >
-          <ItemMaster />
-        </div>
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden ${
+                currentRoute === 'ENTITY_LEDGER' ? '' : 'hidden'
+              }`}
+            >
+              <EntityLedger />
+            </div>
 
-        <div
-          className={`h-full w-full flex-1 flex overflow-hidden ${
-            currentRoute === 'ENTITY_LEDGER' ? '' : 'hidden'
-          }`}
-        >
-          <EntityLedger />
-        </div>
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden ${
+                currentRoute === 'REPORTS' ? '' : 'hidden'
+              }`}
+            >
+              <ReportsDashboard />
+            </div>
 
-        <div
-          className={`h-full w-full flex-1 flex overflow-hidden ${
-            currentRoute === 'REPORTS' ? '' : 'hidden'
-          }`}
-        >
-          <ReportsDashboard />
-        </div>
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden ${
+                currentRoute === 'DISCOVERY' ? '' : 'hidden'
+              }`}
+            >
+              <DiscoveryPage vertical={session.businessType.toLowerCase()} />
+            </div>
+          </>
+        )}
       </main>
 
       {/* Cash Drawer Shift Settlement & Z-Report Modal */}
