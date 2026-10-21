@@ -1,5 +1,6 @@
+use crate::access::{AppAuthState, authorize};
 use crate::discovery::alerts::{
-    acknowledge_alert, generate_alerts, list_alerts, AlertItem, GenerateAlertsReport,
+    AlertItem, GenerateAlertsReport, acknowledge_alert, generate_alerts, list_alerts,
 };
 use crate::discovery::export::{day_summary_text, export_discovery};
 use crate::discovery::facets::{Facets, discover_facets};
@@ -196,6 +197,81 @@ pub fn cmd_refresh_analytics(db_path: &str, today: Option<i64>) -> Result<Refres
         )
     });
     refresh_stats(&mut conn, t).map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// Guarded IPC Discovery Commands (Batch 2: Discovery Hub & Sell Graph)
+// ============================================================================
+
+/// Guarded execution for product discovery.
+pub fn cmd_discover_products_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    query: DiscoveryQuery,
+    vertical: Option<String>,
+    now_ms: i64,
+) -> Result<DiscoveryPage, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_discover_products",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_discover_products(db_path, query, vertical)
+}
+
+/// Guarded execution for facet discovery.
+pub fn cmd_discover_facets_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    query: DiscoveryQuery,
+    vertical: Option<String>,
+    now_ms: i64,
+) -> Result<Facets, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_discover_facets",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_discover_facets(db_path, query, vertical)
+}
+
+/// Guarded execution for sell graph data.
+pub fn cmd_sell_graph_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    kind: GraphKind,
+    params: GraphParams,
+    vertical: Option<String>,
+    now_ms: i64,
+) -> Result<GraphData, String> {
+    let _auth = authorize(&state.as_guard_context(), token, "cmd_sell_graph", now_ms)
+        .map_err(|e| e.to_string())?;
+    cmd_sell_graph(db_path, kind, params, vertical)
+}
+
+/// Guarded execution for analytics refresh.
+pub fn cmd_refresh_analytics_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    today: Option<i64>,
+    now_ms: i64,
+) -> Result<RefreshReport, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_refresh_analytics",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_refresh_analytics(db_path, today)
 }
 
 /// Generates day-close and risk alerts.

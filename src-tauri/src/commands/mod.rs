@@ -609,6 +609,106 @@ pub fn cmd_get_stock_summary(db_path: String) -> Result<StockSummaryReport, Stri
 }
 
 // ============================================================================
+// Guarded IPC Commands (Batch 2: Entities & Reports)
+// ============================================================================
+
+/// Guarded execution for retrieving entities list.
+pub fn cmd_get_entities_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<Vec<EntityRecord>, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_list_entities",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_get_entities(db_path)
+}
+
+/// Guarded execution for creating an entity.
+pub fn cmd_create_entity_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: CreateEntityInput,
+    now_ms: i64,
+) -> Result<EntityRecord, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_record_entity",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_create_entity(db_path, input)
+}
+
+/// Guarded execution for trial balance report.
+pub fn cmd_get_trial_balance_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<TrialBalanceReport, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_get_trial_balance",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_get_trial_balance(db_path)
+}
+
+/// Guarded execution for day book report.
+pub fn cmd_get_day_book_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    date: String,
+    now_ms: i64,
+) -> Result<DayBookReport, String> {
+    let _auth = authorize(&state.as_guard_context(), token, "cmd_get_day_book", now_ms)
+        .map_err(|e| e.to_string())?;
+    cmd_get_day_book(db_path, date)
+}
+
+/// Guarded execution for GSTR-1 report.
+pub fn cmd_get_gstr1_summary_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    fy: String,
+    month: Option<u32>,
+    now_ms: i64,
+) -> Result<Gstr1Report, String> {
+    let _auth = authorize(&state.as_guard_context(), token, "cmd_get_gstr1", now_ms)
+        .map_err(|e| e.to_string())?;
+    cmd_get_gstr1_summary(db_path, fy, month)
+}
+
+/// Guarded execution for stock summary report.
+pub fn cmd_get_stock_summary_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<StockSummaryReport, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_get_stock_summary",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_get_stock_summary(db_path)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
