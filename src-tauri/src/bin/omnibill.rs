@@ -122,44 +122,206 @@ fn handle_info(db_path: &str) {
     }
 }
 
-fn handle_client(mut stream: TcpStream, db_path: &str) {
+pub const MAX_BODY_SIZE: usize = 1_048_576; // 1 MB limit
+
+pub fn is_allowed_origin(origin: &str, port: u16) -> bool {
+    let port_str = port.to_string();
+    origin == "http://localhost:1420"
+        || origin == "http://127.0.0.1:1420"
+        || origin == "http://localhost:4000"
+        || origin == "http://127.0.0.1:4000"
+        || origin == format!("http://localhost:{}", port_str)
+        || origin == format!("http://127.0.0.1:{}", port_str)
+        || origin == "tauri://localhost"
+        || origin == "http://tauri.localhost"
+        || origin == "https://tauri.localhost"
+}
+
+pub fn is_valid_host(host: &str, port: u16) -> bool {
+    let expected_127 = format!("127.0.0.1:{}", port);
+    let expected_localhost = format!("localhost:{}", port);
+    host.eq_ignore_ascii_case(&expected_127) || host.eq_ignore_ascii_case(&expected_localhost)
+}
+
+pub struct ParsedRequest<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub host: Option<&'a str>,
+    pub origin: Option<&'a str>,
+    pub authorization: Option<&'a str>,
+    pub content_length: Option<usize>,
+    pub body: &'a str,
+}
+
+pub fn parse_http_request<'a>(req_str: &'a str) -> Option<ParsedRequest<'a>> {
+    let (head, body) = match req_str.find("\r\n\r\n") {
+        Some(pos) => (&req_str[..pos], &req_str[pos + 4..]),
+        None => (req_str, ""),
+    };
+
+    let mut lines = head.lines();
+    let first_line = lines.next()?;
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next()?;
+    let path = parts.next()?;
+
+    let mut host = None;
+    let mut origin = None;
+    let mut authorization = None;
+    let mut content_length = None;
+
+    for line in lines {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            let val = line[colon_pos + 1..].trim();
+            if key.eq_ignore_ascii_case("host") {
+                host = Some(val);
+            } else if key.eq_ignore_ascii_case("origin") {
+                origin = Some(val);
+            } else if key.eq_ignore_ascii_case("authorization") {
+                authorization = Some(val);
+            } else if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse::<usize>().ok();
+            }
+        }
+    }
+
+    Some(ParsedRequest {
+        method,
+        path,
+        host,
+        origin,
+        authorization,
+        content_length,
+        body,
+    })
+}
+
+pub fn process_http_request(
+    req_str: &str,
+    port: u16,
+    db_path: &str,
+) -> (u16, String, Option<String>) {
+    let req = match parse_http_request(req_str) {
+        Some(r) => r,
+        None => {
+            return (
+                400,
+                serde_json::json!({ "error": "Bad request" }).to_string(),
+                None,
+            );
+        }
+    };
+
+    // 1. Require Host header to be exactly 127.0.0.1:<port> or localhost:<port>
+    let host = match req.host {
+        Some(h) => h,
+        None => {
+            return (
+                403,
+                serde_json::json!({ "error": "Forbidden: missing Host header" }).to_string(),
+                None,
+            );
+        }
+    };
+    if !is_valid_host(host, port) {
+        return (
+            403,
+            serde_json::json!({ "error": "Forbidden: invalid Host header" }).to_string(),
+            None,
+        );
+    }
+
+    // 2. Reject foreign Origin header if present
+    if let Some(origin) = req.origin
+        && !is_allowed_origin(origin, port)
+    {
+        return (
+            403,
+            serde_json::json!({ "error": "Forbidden: foreign Origin not allowed" }).to_string(),
+            None,
+        );
+    }
+
+    // 3. Limit request body to 1 MB
+    if req.body.len() > MAX_BODY_SIZE || req.content_length.unwrap_or(0) > MAX_BODY_SIZE {
+        return (
+            413,
+            serde_json::json!({ "error": "Payload Too Large: body exceeds 1 MB limit" })
+                .to_string(),
+            req.origin.map(String::from),
+        );
+    }
+
+    // Handle OPTIONS preflight
+    if req.method == "OPTIONS" {
+        return (204, String::new(), req.origin.map(String::from));
+    }
+
+    // Dispatch routes
+    let (status, body) = dispatch_route(req.method, req.path, req.body, db_path);
+    (status, body, req.origin.map(String::from))
+}
+
+fn handle_client(mut stream: TcpStream, db_path: &str, port: u16) {
     let mut buffer = [0u8; 65536];
     let bytes_read = match stream.read(&mut buffer) {
-        Ok(b) => b,
-        Err(_) => return,
+        Ok(b) if b > 0 => b,
+        _ => return,
     };
 
     let req_str = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let mut lines = req_str.lines();
-    let first_line = lines.next().unwrap_or("");
-    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    let (status_code, json_body, allowed_origin) = process_http_request(&req_str, port, db_path);
 
-    if parts.len() < 2 {
-        return;
-    }
-
-    let method = parts[0];
-    let path = parts[1];
-
-    // Handle CORS preflight
-    if method == "OPTIONS" {
-        let resp = "HTTP/1.1 204 No Content\r\n\
-                    Access-Control-Allow-Origin: *\r\n\
-                    Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-                    Access-Control-Allow-Headers: Content-Type\r\n\
-                    Connection: close\r\n\r\n";
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    }
-
-    // Extract body
-    let body = if let Some(pos) = req_str.find("\r\n\r\n") {
-        &req_str[pos + 4..]
-    } else {
-        ""
+    let cors_header = match allowed_origin {
+        Some(ref origin) => format!("Access-Control-Allow-Origin: {}\r\n", origin),
+        None => String::new(),
     };
 
-    let (status_code, json_body) = match (method, path) {
+    let status_text = match status_code {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        413 => "Payload Too Large",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+
+    let response = if status_code == 204 {
+        format!(
+            "HTTP/1.1 204 No Content\r\n\
+             {}\
+             Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+             Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
+             Cache-Control: no-store\r\n\
+             Connection: close\r\n\r\n",
+            cors_header
+        )
+    } else {
+        format!(
+            "HTTP/1.1 {} {}\r\n\
+             Content-Type: application/json\r\n\
+             {}\
+             Cache-Control: no-store\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n\
+             {}",
+            status_code,
+            status_text,
+            cors_header,
+            json_body.len(),
+            json_body
+        )
+    };
+
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn dispatch_route(method: &str, path: &str, body: &str, db_path: &str) -> (u16, String) {
+    match (method, path) {
         ("GET", "/api/info") => (
             200,
             serde_json::json!({ "status": "ok", "app": "OmniBill ERP", "version": "0.1.0" })
@@ -349,10 +511,12 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                 out_dir: Option<String>,
             }
             match serde_json::from_str::<Req>(body) {
-                Ok(r) => match cmd_export_discovery(db_path, r.query, r.vertical, r.today, r.out_dir) {
-                    Ok(path) => (200, serde_json::json!({ "path": path }).to_string()),
-                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
-                },
+                Ok(r) => {
+                    match cmd_export_discovery(db_path, r.query, r.vertical, r.today, r.out_dir) {
+                        Ok(path) => (200, serde_json::json!({ "path": path }).to_string()),
+                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                    }
+                }
                 Err(e) => (
                     400,
                     serde_json::json!({ "error": e.to_string() }).to_string(),
@@ -375,20 +539,7 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
             }
         }
         _ => (404, serde_json::json!({ "error": "Not Found" }).to_string()),
-    };
-
-    let response = format!(
-        "HTTP/1.1 {} OK\r\n\
-         Content-Type: application/json\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\r\n{}",
-        status_code,
-        json_body.len(),
-        json_body
-    );
-
-    let _ = stream.write_all(response.as_bytes());
+    }
 }
 
 fn handle_serve(port: u16, db_path: &str) {
@@ -409,7 +560,7 @@ fn handle_serve(port: u16, db_path: &str) {
     println!("[OmniBill] Ready for UI interactions. Press Ctrl+C to stop.");
 
     for stream in listener.incoming().flatten() {
-        handle_client(stream, db_path);
+        handle_client(stream, db_path, port);
     }
 }
 
@@ -450,5 +601,60 @@ fn main() {
             eprintln!("Unknown option: {}", other);
             print_help();
         }
+    }
+}
+
+#[cfg(test)]
+mod server_hygiene_tests {
+    use super::*;
+
+    #[test]
+    fn test_wrong_host_rejected_with_403() {
+        let req = "GET /api/info HTTP/1.1\r\nHost: evil.attacker.com\r\n\r\n";
+        let (status, body, _) = process_http_request(req, 4000, "test.db");
+        assert_eq!(status, 403);
+        assert!(body.contains("Host"));
+    }
+
+    #[test]
+    fn test_valid_host_accepted() {
+        let req1 = "GET /api/info HTTP/1.1\r\nHost: 127.0.0.1:4000\r\n\r\n";
+        let (status1, body1, _) = process_http_request(req1, 4000, "test.db");
+        assert_eq!(status1, 200);
+        assert!(body1.contains("OmniBill"));
+
+        let req2 = "GET /api/info HTTP/1.1\r\nHost: localhost:4000\r\n\r\n";
+        let (status2, body2, _) = process_http_request(req2, 4000, "test.db");
+        assert_eq!(status2, 200);
+        assert!(body2.contains("OmniBill"));
+    }
+
+    #[test]
+    fn test_foreign_origin_rejected_with_403() {
+        let req = "GET /api/info HTTP/1.1\r\nHost: 127.0.0.1:4000\r\nOrigin: https://evil-site.com\r\n\r\n";
+        let (status, body, _) = process_http_request(req, 4000, "test.db");
+        assert_eq!(status, 403);
+        assert!(body.contains("Origin"));
+    }
+
+    #[test]
+    fn test_allowed_origin_accepted_without_wildcard() {
+        let req = "GET /api/info HTTP/1.1\r\nHost: 127.0.0.1:4000\r\nOrigin: http://localhost:1420\r\n\r\n";
+        let (status, _, origin) = process_http_request(req, 4000, "test.db");
+        assert_eq!(status, 200);
+        assert_eq!(origin.as_deref(), Some("http://localhost:1420"));
+    }
+
+    #[test]
+    fn test_oversize_body_rejected_with_413() {
+        let big_body = "x".repeat(MAX_BODY_SIZE + 10);
+        let req = format!(
+            "POST /api/info HTTP/1.1\r\nHost: 127.0.0.1:4000\r\nContent-Length: {}\r\n\r\n{}",
+            big_body.len(),
+            big_body
+        );
+        let (status, body, _) = process_http_request(&req, 4000, "test.db");
+        assert_eq!(status, 413);
+        assert!(body.contains("Payload Too Large"));
     }
 }
