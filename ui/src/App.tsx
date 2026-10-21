@@ -32,6 +32,8 @@ import { posSound } from './lib/sound';
 import { DiscoveryPage } from './features/discovery/DiscoveryPage';
 import { SellGraphPage } from './features/sellgraph/SellGraphPage';
 import { discoveryStore } from './features/discovery/store';
+import { AlertsPanel } from './features/alerts/AlertsPanel';
+import { AlertsBellButton } from './features/alerts/AlertsBellButton';
 
 export type AppRoute =
   | 'POS'
@@ -88,6 +90,7 @@ export const App: React.FC = () => {
   const [showNavHelp, setShowNavHelp] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(posSound.enabled);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [isAlertsOpen, setIsAlertsOpen] = useState(false);
 
   // Sync route based on business type on initial load or session change
   useEffect(() => {
@@ -414,6 +417,9 @@ export const App: React.FC = () => {
             <span className="hidden lg:inline">Shift / Drawer</span>
           </button>
 
+          {/* Risk & Inventory Alerts Bell Button */}
+          <AlertsBellButton onClick={() => setIsAlertsOpen(true)} />
+
           {/* Daylight / Midnight Mode Toggle */}
           <button
             onClick={toggleTheme}
@@ -625,6 +631,17 @@ export const App: React.FC = () => {
         operatorName={session.operatorName}
         counterId={session.counterId}
         storeName={session.storeName}
+      />
+
+      {/* Inventory & Risk Alerts Panel */}
+      <AlertsPanel
+        isOpen={isAlertsOpen}
+        onClose={() => setIsAlertsOpen(false)}
+        vertical={session.businessType.toLowerCase()}
+        onNavigateToItem={(_id, name) => {
+          discoveryStore.setFilter({ text: name });
+          setCurrentRoute('DISCOVERY');
+        }}
       />
     </div>
   );

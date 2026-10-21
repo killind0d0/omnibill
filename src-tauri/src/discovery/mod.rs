@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod clock;
 pub mod commands;
 pub mod cursor;

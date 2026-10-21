@@ -1,3 +1,6 @@
+use crate::discovery::alerts::{
+    acknowledge_alert, generate_alerts, list_alerts, AlertItem, GenerateAlertsReport,
+};
 use crate::discovery::facets::{Facets, discover_facets};
 use crate::discovery::graph::{
     CategoryTrendPoint, DeadStockItem, ExpiryRiskItem, HeatmapCell, MarginVelocityPoint, MetricBy,
@@ -192,4 +195,51 @@ pub fn cmd_refresh_analytics(db_path: &str, today: Option<i64>) -> Result<Refres
         )
     });
     refresh_stats(&mut conn, t).map_err(|e| e.to_string())
+}
+
+/// Generates day-close and risk alerts.
+pub fn cmd_generate_alerts(
+    db_path: &str,
+    vertical: Option<String>,
+    today: Option<i64>,
+) -> Result<GenerateAlertsReport, String> {
+    let conn = crate::database::open_connection(db_path).map_err(|e| e.to_string())?;
+    let vert = vertical.unwrap_or_else(|| "retail".to_string());
+    let t = today.unwrap_or_else(|| {
+        crate::discovery::clock::business_day(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        )
+    });
+    generate_alerts(&conn, &vert, t).map_err(|e| e.to_string())
+}
+
+/// Lists alerts.
+pub fn cmd_list_alerts(
+    db_path: &str,
+    include_acknowledged: bool,
+) -> Result<Vec<AlertItem>, String> {
+    let pool = ReadOnlyPool::new(db_path).map_err(|e| e.to_string())?;
+    let conn = pool.acquire().map_err(|e| e.to_string())?;
+    list_alerts(&conn, include_acknowledged).map_err(|e| e.to_string())
+}
+
+/// Acknowledges an alert.
+pub fn cmd_acknowledge_alert(
+    db_path: &str,
+    alert_id: i64,
+    today: Option<i64>,
+) -> Result<(), String> {
+    let conn = crate::database::open_connection(db_path).map_err(|e| e.to_string())?;
+    let t = today.unwrap_or_else(|| {
+        crate::discovery::clock::business_day(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        )
+    });
+    acknowledge_alert(&conn, alert_id, t).map_err(|e| e.to_string())
 }

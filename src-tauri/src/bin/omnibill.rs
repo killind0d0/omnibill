@@ -292,6 +292,53 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                 Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
             }
         }
+        ("POST", "/api/alerts/generate") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                vertical: Option<String>,
+                today: Option<i64>,
+            }
+            let req = serde_json::from_str::<Req>(body).unwrap_or(Req {
+                vertical: None,
+                today: None,
+            });
+            match cmd_generate_alerts(db_path, req.vertical, req.today) {
+                Ok(rep) => (200, serde_json::to_string(&rep).unwrap_or_default()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        ("POST", "/api/alerts/list") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "includeAcknowledged", default)]
+                include_acknowledged: bool,
+            }
+            let req = serde_json::from_str::<Req>(body).unwrap_or(Req {
+                include_acknowledged: false,
+            });
+            match cmd_list_alerts(db_path, req.include_acknowledged) {
+                Ok(alerts) => (200, serde_json::to_string(&alerts).unwrap_or_default()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        ("POST", "/api/alerts/acknowledge") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                #[serde(rename = "alertId")]
+                alert_id: i64,
+                today: Option<i64>,
+            }
+            match serde_json::from_str::<Req>(body) {
+                Ok(r) => match cmd_acknowledge_alert(db_path, r.alert_id, r.today) {
+                    Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
+        }
         _ => (404, serde_json::json!({ "error": "Not Found" }).to_string()),
     };
 
