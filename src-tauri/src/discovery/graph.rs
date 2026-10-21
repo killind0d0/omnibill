@@ -1,9 +1,9 @@
 use rusqlite::{Connection, Result, params};
 use serde::{Deserialize, Serialize};
 
-/// Computes (year, month) for a given day offset from 1970-01-01 (day 0).
+/// Computes (year, month, day) for a given day offset from 1970-01-01 (day 0).
 /// Uses Howard Hinnant's integer civil-from-days algorithm.
-pub fn month_of_day(day: i64) -> (i64, u8) {
+pub fn civil_from_days(day: i64) -> (i64, u8, u8) {
     let z = day + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u64;
@@ -11,9 +11,17 @@ pub fn month_of_day(day: i64) -> (i64, u8) {
     let y = (yoe as i64) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y_final = if m <= 2 { y + 1 } else { y };
-    (y_final, m as u8)
+    (y_final, m as u8, d as u8)
+}
+
+/// Computes (year, month) for a given day offset from 1970-01-01 (day 0).
+/// Uses Howard Hinnant's integer civil-from-days algorithm.
+pub fn month_of_day(day: i64) -> (i64, u8) {
+    let (y, m, _) = civil_from_days(day);
+    (y, m)
 }
 
 /// Computes weekday index (0..=6) where 0 = Sunday, 4 = Thursday (day 0: 1970-01-01).

@@ -10,6 +10,7 @@ import { useScannerDetect } from './useScannerDetect';
 import { useDiscoveryHotkeys } from './hotkeys';
 import { Preset, ProductDiscoveryItem } from './types';
 import { formatBp, formatDay, formatDaysX10, formatPaise, formatQtyMilli } from './format';
+import { exportDiscoveryProducts, fetchDaySummaryText } from './api';
 import { ShieldAlert, X } from 'lucide-react';
 
 interface DiscoveryPageProps {
@@ -98,6 +99,29 @@ export const DiscoveryPage: React.FC<DiscoveryPageProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  const handleExportCsv = async () => {
+    showToast('Exporting Discovery CSV...');
+    try {
+      const res = await exportDiscoveryProducts(store.query, vertical);
+      showToast(`Exported CSV successfully to ${res.path}`);
+    } catch (e) {
+      showToast(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleCopyDaySummary = async () => {
+    showToast('Generating WhatsApp summary...');
+    try {
+      const summary = await fetchDaySummaryText(vertical);
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(summary);
+      }
+      showToast('Day summary copied to clipboard! Ready to paste into WhatsApp.');
+    } catch (e) {
+      showToast(`Summary failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   // Keyboard Shortcuts Hook
   useDiscoveryHotkeys({
     onFocusSearch: () => {
@@ -124,7 +148,7 @@ export const DiscoveryPage: React.FC<DiscoveryPageProps> = ({
     onToggleSupplierFilter: () => setIsSidebarOpen(true),
     onToggleDateFilter: () => setIsSidebarOpen(true),
     onClearFilterStep: handleClearFilterStep,
-    onTriggerExport: () => showToast('Export coming in D5B'),
+    onTriggerExport: handleExportCsv,
   });
 
   const handleSelectProduct = useCallback((product: ProductDiscoveryItem) => {
@@ -161,7 +185,7 @@ export const DiscoveryPage: React.FC<DiscoveryPageProps> = ({
         }}
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
-        onExportClick={() => showToast('Export coming in D5B')}
+        onExportClick={handleExportCsv}
         vertical={vertical}
         totalItems={store.totalCapped}
         searchInputRef={searchInputRef}

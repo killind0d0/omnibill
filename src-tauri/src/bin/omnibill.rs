@@ -339,6 +339,41 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                 ),
             }
         }
+        ("POST", "/api/discovery/export") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                query: omnibill_core::discovery::query::DiscoveryQuery,
+                vertical: Option<String>,
+                today: Option<i64>,
+                #[serde(rename = "outDir")]
+                out_dir: Option<String>,
+            }
+            match serde_json::from_str::<Req>(body) {
+                Ok(r) => match cmd_export_discovery(db_path, r.query, r.vertical, r.today, r.out_dir) {
+                    Ok(path) => (200, serde_json::json!({ "path": path }).to_string()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
+        }
+        ("POST", "/api/discovery/day_summary") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                vertical: Option<String>,
+                day: Option<i64>,
+            }
+            let req = serde_json::from_str::<Req>(body).unwrap_or(Req {
+                vertical: None,
+                day: None,
+            });
+            match cmd_day_summary_text(db_path, req.vertical, req.day) {
+                Ok(text) => (200, serde_json::json!({ "summary": text }).to_string()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
         _ => (404, serde_json::json!({ "error": "Not Found" }).to_string()),
     };
 

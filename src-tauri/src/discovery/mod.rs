@@ -2,6 +2,7 @@ pub mod alerts;
 pub mod clock;
 pub mod commands;
 pub mod cursor;
+pub mod export;
 pub mod facets;
 pub mod fts;
 pub mod graph;

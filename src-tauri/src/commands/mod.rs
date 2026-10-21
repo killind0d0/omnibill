@@ -1,8 +1,8 @@
 use crate::database::open_connection;
 pub use crate::discovery::commands::{
-    GraphData, GraphKind, GraphParams, cmd_acknowledge_alert, cmd_discover_facets,
-    cmd_discover_products, cmd_generate_alerts, cmd_list_alerts, cmd_refresh_analytics,
-    cmd_sell_graph,
+    GraphData, GraphKind, GraphParams, cmd_acknowledge_alert, cmd_day_summary_text,
+    cmd_discover_facets, cmd_discover_products, cmd_export_discovery, cmd_generate_alerts,
+    cmd_list_alerts, cmd_refresh_analytics, cmd_sell_graph,
 };
 use crate::posting::{
     PaymentInput, PostedPayment, PostedPurchase, PostedReturn, PostedSale, PostedSaleWithPayments,

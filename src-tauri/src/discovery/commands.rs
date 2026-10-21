@@ -1,6 +1,7 @@
 use crate::discovery::alerts::{
     acknowledge_alert, generate_alerts, list_alerts, AlertItem, GenerateAlertsReport,
 };
+use crate::discovery::export::{day_summary_text, export_discovery};
 use crate::discovery::facets::{Facets, discover_facets};
 use crate::discovery::graph::{
     CategoryTrendPoint, DeadStockItem, ExpiryRiskItem, HeatmapCell, MarginVelocityPoint, MetricBy,
@@ -242,4 +243,47 @@ pub fn cmd_acknowledge_alert(
         )
     });
     acknowledge_alert(&conn, alert_id, t).map_err(|e| e.to_string())
+}
+
+/// Exports discovery query results to a CSV file.
+pub fn cmd_export_discovery(
+    db_path: &str,
+    query: DiscoveryQuery,
+    vertical: Option<String>,
+    today: Option<i64>,
+    out_dir: Option<String>,
+) -> Result<String, String> {
+    let pool = ReadOnlyPool::new(db_path).map_err(|e| e.to_string())?;
+    let conn = pool.acquire().map_err(|e| e.to_string())?;
+    let vert = vertical.unwrap_or_else(|| "retail".to_string());
+    let t = today.unwrap_or_else(|| {
+        crate::discovery::clock::business_day(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        )
+    });
+    let path = export_discovery(&conn, &query, &vert, t, out_dir.as_deref())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Generates a WhatsApp-ready day summary plain text.
+pub fn cmd_day_summary_text(
+    db_path: &str,
+    vertical: Option<String>,
+    day: Option<i64>,
+) -> Result<String, String> {
+    let pool = ReadOnlyPool::new(db_path).map_err(|e| e.to_string())?;
+    let conn = pool.acquire().map_err(|e| e.to_string())?;
+    let vert = vertical.unwrap_or_else(|| "retail".to_string());
+    let t = day.unwrap_or_else(|| {
+        crate::discovery::clock::business_day(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        )
+    });
+    day_summary_text(&conn, &vert, t).map_err(|e| e.to_string())
 }

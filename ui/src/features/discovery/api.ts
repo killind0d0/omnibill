@@ -125,3 +125,65 @@ export async function triggerRefreshAnalytics(today?: number): Promise<{
   }
   return await res.json();
 }
+
+/**
+ * Triggers discovery view CSV export.
+ */
+export async function exportDiscoveryProducts(
+  query: DiscoveryQuery,
+  vertical?: string,
+  today?: number,
+  outDir?: string
+): Promise<{ path: string }> {
+  if (isTauriRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const path = await invoke<string>('cmd_export_discovery', {
+      db_path: getDbPath(),
+      query,
+      vertical: vertical || 'retail',
+      today,
+      out_dir: outDir,
+    });
+    return { path };
+  }
+
+  const res = await fetch('http://127.0.0.1:4000/api/discovery/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, vertical: vertical || 'retail', today, outDir }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Export failed' }));
+    throw new Error(err.error || 'Failed to export discovery view');
+  }
+  return await res.json();
+}
+
+/**
+ * Fetches WhatsApp-formatted day summary plain text.
+ */
+export async function fetchDaySummaryText(
+  vertical?: string,
+  day?: number
+): Promise<string> {
+  if (isTauriRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<string>('cmd_day_summary_text', {
+      db_path: getDbPath(),
+      vertical: vertical || 'retail',
+      day,
+    });
+  }
+
+  const res = await fetch('http://127.0.0.1:4000/api/discovery/day_summary', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vertical: vertical || 'retail', day }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Day summary failed' }));
+    throw new Error(err.error || 'Failed to fetch day summary');
+  }
+  const data = await res.json();
+  return data.summary;
+}
