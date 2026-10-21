@@ -2,7 +2,7 @@ use control_plane::auth::{create_admin, reset_admin_totp};
 use control_plane::db::{init_schema, open_db};
 use control_plane::keys::verify_strict_permissions;
 use control_plane::ratelimit::SlidingWindowLimiter;
-use control_plane::server::{create_router, AppState};
+use control_plane::routes::{create_router, AppState};
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -93,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
 
         match create_admin(&conn, &u, &password, &server_secret, now_ms, allow_second) {
             Ok(created) => {
@@ -138,8 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
 
         match reset_admin_totp(&conn, &u, &server_secret, now_ms) {
             Ok(created) => {
@@ -189,9 +189,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_schema(&conn)?;
     drop(conn);
 
+    let vendor_key_bytes = std::fs::read(vendor_key_path)?;
+    if vendor_key_bytes.len() != 32 {
+        eprintln!(
+            "Error: Vendor key file must be 32 bytes, got {}",
+            vendor_key_bytes.len()
+        );
+        std::process::exit(1);
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&vendor_key_bytes[..32]);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_arr);
+
     let state = Arc::new(AppState {
         db_path,
         server_secret,
+        signing_key: Arc::new(signing_key),
         rate_limiter: Arc::new(SlidingWindowLimiter::new(60 * 1000, 100)),
     });
 

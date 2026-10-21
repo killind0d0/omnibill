@@ -47,13 +47,13 @@ async fn admin_login_handler(
     check_mutating_admin_header(&Method::POST, &headers)?;
 
     let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
-    let peer: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let peer = SocketAddr::from(([127, 0, 0, 1], 0));
     let client_ip = extract_client_ip(peer, xff);
 
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
 
     if !state.rate_limiter.check_and_record(&client_ip, now_ms) {
         let resp = (
@@ -101,8 +101,8 @@ async fn admin_me_handler(
 ) -> Result<Response, AuthError> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
 
     let token = extract_session_token(&headers)?;
     let conn = open_db(&state.db_path).map_err(AuthError::Db)?;
@@ -134,8 +134,8 @@ async fn admin_test_mutation_handler(
 
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
 
     let token = extract_session_token(&headers)?;
     let conn = open_db(&state.db_path).map_err(AuthError::Db)?;
