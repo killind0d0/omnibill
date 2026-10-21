@@ -87,4 +87,49 @@ assert.equal(formatDay(11016), '2000-02-29');
 assert.equal(formatDay(20748), '2026-10-22'); // or 20747 = 2026-10-21
 assert.equal(formatDay(20747), '2026-10-21');
 
+function parseIntegerString(s) {
+  let val = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 48 || code > 57) throw new Error('Invalid integer character');
+    val = val * 10 + (code - 48);
+  }
+  return val;
+}
+
+function parseRupeesToPaise(input) {
+  const trimmed = input.trim();
+  if (trimmed === '') return undefined;
+  if (trimmed.startsWith('-')) throw new Error('Negative values not allowed');
+
+  const parts = trimmed.split('.');
+  if (parts.length > 2) throw new Error('Invalid number format');
+
+  const wholeStr = parts[0];
+  const fracStr = parts.length === 2 ? parts[1] : '';
+
+  if (wholeStr !== '' && !/^\d+$/.test(wholeStr)) throw new Error('Invalid whole digits');
+  if (fracStr !== '' && !/^\d+$/.test(fracStr)) throw new Error('Invalid decimal digits');
+  if (wholeStr === '' && fracStr === '') throw new Error('Empty numeric value');
+
+  const whole = wholeStr === '' ? 0 : parseIntegerString(wholeStr);
+  if (fracStr.length > 2) throw new Error('Sub-paisa precision not permitted');
+
+  let paise = 0;
+  if (fracStr.length === 1) paise = parseIntegerString(fracStr) * 10;
+  else if (fracStr.length === 2) paise = parseIntegerString(fracStr);
+
+  return whole * 100 + paise;
+}
+
+// 3. String-to-integer parser tests
+assert.equal(parseRupeesToPaise('12'), 1200);
+assert.equal(parseRupeesToPaise('12.5'), 1250);
+assert.equal(parseRupeesToPaise('12.50'), 1250);
+assert.equal(parseRupeesToPaise('.5'), 50);
+assert.equal(parseRupeesToPaise(''), undefined);
+assert.throws(() => parseRupeesToPaise('12.505'), /Sub-paisa precision/);
+assert.throws(() => parseRupeesToPaise('abc'), /Invalid/);
+assert.throws(() => parseRupeesToPaise('-3'), /Negative/);
+
 console.log('ALL FRONTEND FORMAT TESTS PASSED');

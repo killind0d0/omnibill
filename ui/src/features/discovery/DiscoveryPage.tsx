@@ -1,168 +1,183 @@
 // ui/src/features/discovery/DiscoveryPage.tsx
-// Core Product Discovery Hub workspace page
+// Complete Discovery Hub workspace integrating FilterBar, FacetSidebar, Grid, Scanner, and Hotkeys
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useDiscoveryStore, discoveryStore } from './store';
 import { DiscoveryGrid } from './DiscoveryGrid';
+import { FilterBar } from './FilterBar';
+import { FacetSidebar } from './FacetSidebar';
+import { useScannerDetect } from './useScannerDetect';
+import { useDiscoveryHotkeys } from './hotkeys';
 import { Preset, ProductDiscoveryItem } from './types';
 import { formatBp, formatDay, formatDaysX10, formatPaise, formatQtyMilli } from './format';
-import {
-  Search,
-  RotateCcw,
-  SlidersHorizontal,
-  Package,
-  Layers,
-  Sparkles,
-  TrendingUp,
-  Clock,
-  AlertTriangle,
-  X,
-  Tag,
-  ShieldAlert,
-} from 'lucide-react';
+import { ShieldAlert, X } from 'lucide-react';
 
 interface DiscoveryPageProps {
   vertical?: string;
+  onNavigateSellGraph?: () => void;
 }
 
-export const DiscoveryPage: React.FC<DiscoveryPageProps> = ({ vertical = 'retail' }) => {
+export const DiscoveryPage: React.FC<DiscoveryPageProps> = ({
+  vertical = 'retail',
+  onNavigateSellGraph,
+}) => {
   const store = useDiscoveryStore();
   const [selectedProduct, setSelectedProduct] = useState<ProductDiscoveryItem | null>(null);
   const [searchInput, setSearchInput] = useState(store.query.text || '');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Initialize store with active vertical
   useEffect(() => {
     discoveryStore.loadInitial(vertical);
   }, [vertical]);
 
-  // Handle live search debounce
+  // Debounced search input handler (80ms per task prompt)
   useEffect(() => {
     const timer = setTimeout(() => {
       if (searchInput !== (store.query.text || '')) {
         discoveryStore.setFilter({ text: searchInput.trim() || undefined });
       }
-    }, 200);
+    }, 80);
     return () => clearTimeout(timer);
   }, [searchInput, store.query.text]);
 
-  const handlePresetClick = (p: Preset) => {
-    if (store.query.preset === p) {
+  // Barcode Hardware Scanner Detection (immediate, without debounce)
+  useScannerDetect({
+    onScan: (barcode) => {
+      setSearchInput(barcode);
+      discoveryStore.setFilter({ text: barcode });
+    },
+  });
+
+  // Cycle states for hotkeys Alt+2 and Alt+3
+  const [expiringCycle, setExpiringCycle] = useState<0 | 1 | 2>(0);
+  const [deadCycle, setDeadCycle] = useState<0 | 1 | 2>(0);
+
+  const handleCycleExpiring = () => {
+    const cycleMap: Array<Preset> = ['expiring30', 'expiring60', 'expiring90'];
+    const nextIdx = (expiringCycle + 1) % 3 as 0 | 1 | 2;
+    setExpiringCycle(nextIdx);
+    discoveryStore.applyPreset(cycleMap[expiringCycle]);
+  };
+
+  const handleCycleDeadStock = () => {
+    const cycleMap: Array<Preset> = ['dead30', 'dead60', 'dead90'];
+    const nextIdx = (deadCycle + 1) % 3 as 0 | 1 | 2;
+    setDeadCycle(nextIdx);
+    discoveryStore.applyPreset(cycleMap[deadCycle]);
+  };
+
+  const handleClearFilterStep = () => {
+    const q = store.query;
+    if (searchInput) {
+      setSearchInput('');
+      discoveryStore.setFilter({ text: undefined });
+    } else if (q.preset) {
       discoveryStore.applyPreset(undefined);
+    } else if (q.brandIds && q.brandIds.length > 0) {
+      discoveryStore.setFilter({ brandIds: [] });
+    } else if (q.supplierIds && q.supplierIds.length > 0) {
+      discoveryStore.setFilter({ supplierIds: [] });
+    } else if (q.sellPaise || q.marginBp || q.stockMilli || q.expiryDay) {
+      discoveryStore.setFilter({
+        sellPaise: undefined,
+        marginBp: undefined,
+        stockMilli: undefined,
+        expiryDay: undefined,
+      });
     } else {
-      discoveryStore.applyPreset(p);
+      discoveryStore.reset();
     }
   };
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Keyboard Shortcuts Hook
+  useDiscoveryHotkeys({
+    onFocusSearch: () => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    },
+    onApplyFastMovers: () => {
+      discoveryStore.setFilter({
+        preset: 'fast',
+        sort: [{ key: 'velocity', dir: 'desc' }],
+      });
+    },
+    onCycleExpiring: handleCycleExpiring,
+    onCycleDeadStock: handleCycleDeadStock,
+    onApplyBelowReorder: () => discoveryStore.applyPreset('belowReorder'),
+    onNavigateSellGraph: () => {
+      if (onNavigateSellGraph) {
+        onNavigateSellGraph();
+      } else {
+        showToast('Navigating to Sell Graph view...');
+      }
+    },
+    onToggleBrandFilter: () => setIsSidebarOpen(true),
+    onToggleSupplierFilter: () => setIsSidebarOpen(true),
+    onToggleDateFilter: () => setIsSidebarOpen(true),
+    onClearFilterStep: handleClearFilterStep,
+    onTriggerExport: () => showToast('Export coming in D5B'),
+  });
 
   const handleSelectProduct = useCallback((product: ProductDiscoveryItem) => {
     setSelectedProduct(product);
   }, []);
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-950 overflow-hidden">
-      {/* Top Controls Toolbar */}
-      <header className="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
-        {/* Search Bar */}
-        <div className="flex items-center space-x-2 flex-1 max-w-md">
-          <div className="relative w-full">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search by product name, SKU, or scan barcode..."
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            />
-            {searchInput && (
-              <button
-                onClick={() => setSearchInput('')}
-                className="absolute right-2.5 top-2 text-slate-500 hover:text-slate-300"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Quick Presets Filter Tags */}
-        <div className="flex items-center space-x-1.5 overflow-x-auto text-xs py-0.5">
-          <button
-            onClick={() => handlePresetClick('fast')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
-              store.query.preset === 'fast'
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <TrendingUp className="w-3 h-3 text-blue-300" /> Fast Movers
-          </button>
-
-          <button
-            onClick={() => handlePresetClick('slow')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
-              store.query.preset === 'slow'
-                ? 'bg-amber-600 text-white'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <Clock className="w-3 h-3 text-amber-300" /> Slow Movers
-          </button>
-
-          <button
-            onClick={() => handlePresetClick('dead60')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
-              store.query.preset === 'dead60'
-                ? 'bg-rose-600 text-white'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <AlertTriangle className="w-3 h-3 text-rose-300" /> Dead Stock 60d
-          </button>
-
-          <button
-            onClick={() => handlePresetClick('expiring60')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
-              store.query.preset === 'expiring60'
-                ? 'bg-purple-600 text-white'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <Sparkles className="w-3 h-3 text-purple-300" /> Expiring 60d
-          </button>
-
-          <button
-            onClick={() => handlePresetClick('belowReorder')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
-              store.query.preset === 'belowReorder'
-                ? 'bg-orange-600 text-white'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            <Package className="w-3 h-3 text-orange-300" /> Below Reorder
+    <div className="flex flex-col h-full w-full bg-slate-950 overflow-hidden relative">
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-blue-600 text-white text-xs px-4 py-2 rounded-lg shadow-xl font-medium flex items-center gap-2 animate-in fade-in duration-150">
+          <span>{toastMessage}</span>
+          <button onClick={() => setToastMessage(null)} className="text-blue-200 hover:text-white">
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
+      )}
 
-        {/* Total Count and Reset Actions */}
-        <div className="flex items-center space-x-2 shrink-0">
-          <span className="text-xs text-slate-400 font-mono">
-            {store.totalCapped > 10000 ? '10,000+ items' : `${store.totalCapped} items`}
-          </span>
+      {/* Top Filter Bar Toolbar */}
+      <FilterBar
+        query={store.query}
+        facets={store.facets}
+        searchInput={searchInput}
+        onSearchChange={setSearchInput}
+        onClearSearch={() => {
+          setSearchInput('');
+          discoveryStore.setFilter({ text: undefined });
+        }}
+        onSelectPreset={(p) => discoveryStore.applyPreset(p)}
+        onRemoveFilter={(partial) => discoveryStore.setFilter(partial)}
+        onClearAll={() => {
+          setSearchInput('');
+          discoveryStore.reset();
+        }}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+        onExportClick={() => showToast('Export coming in D5B')}
+        vertical={vertical}
+        totalItems={store.totalCapped}
+        searchInputRef={searchInputRef}
+      />
 
-          <button
-            onClick={() => {
-              setSearchInput('');
-              discoveryStore.reset();
-            }}
-            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
-            title="Reset all filters"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Reset</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Grid View */}
+      {/* Main Layout Area: Facet Sidebar + Grid */}
       <div className="flex-1 flex overflow-hidden relative">
+        <FacetSidebar
+          query={store.query}
+          facets={store.facets}
+          onFilterChange={(partial) => discoveryStore.setFilter(partial)}
+          onReset={() => discoveryStore.reset()}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+        />
+
         <DiscoveryGrid
           items={store.items}
           sort={store.query.sort || []}
