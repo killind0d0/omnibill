@@ -1,5 +1,10 @@
 target/
 node_modules/
+control-plane/target/
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.key
+*.pem
+*.env
