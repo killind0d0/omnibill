@@ -19,6 +19,7 @@ import {
   Sun,
   Moon,
   Coins,
+  TrendingUp,
 } from 'lucide-react';
 import { LightningPOS } from './components/pos/LightningPOS';
 import { VerticalBillingApp } from './verticals/VerticalBillingApp';
@@ -29,8 +30,17 @@ import { LoginScreen, UserSession, BusinessType } from './components/auth/LoginS
 import { ShiftSettlementModal } from './components/pos/ShiftSettlementModal';
 import { posSound } from './lib/sound';
 import { DiscoveryPage } from './features/discovery/DiscoveryPage';
+import { SellGraphPage } from './features/sellgraph/SellGraphPage';
+import { discoveryStore } from './features/discovery/store';
 
-export type AppRoute = 'POS' | 'VERTICALS' | 'ITEM_MASTER' | 'ENTITY_LEDGER' | 'REPORTS' | 'DISCOVERY';
+export type AppRoute =
+  | 'POS'
+  | 'VERTICALS'
+  | 'ITEM_MASTER'
+  | 'ENTITY_LEDGER'
+  | 'REPORTS'
+  | 'DISCOVERY'
+  | 'SELL_GRAPH';
 
 export const App: React.FC = () => {
   // Session State
@@ -342,7 +352,21 @@ export const App: React.FC = () => {
                 title="Inventory Discovery Hub & Sorting Analytics"
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Discovery Hub</span>
+                <span className="hidden md:inline">Discovery</span>
+              </button>
+
+              {/* Sell Graph */}
+              <button
+                onClick={() => setCurrentRoute('SELL_GRAPH')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'SELL_GRAPH'
+                    ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Sell Graph Business Intelligence & Turnover Analysis"
+              >
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Sell Graph</span>
               </button>
             </>
           )}
@@ -569,7 +593,26 @@ export const App: React.FC = () => {
                 currentRoute === 'DISCOVERY' ? '' : 'hidden'
               }`}
             >
-              <DiscoveryPage vertical={session.businessType.toLowerCase()} />
+              <DiscoveryPage
+                vertical={session.businessType.toLowerCase()}
+                onNavigateSellGraph={() => setCurrentRoute('SELL_GRAPH')}
+              />
+            </div>
+
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden ${
+                currentRoute === 'SELL_GRAPH' ? '' : 'hidden'
+              }`}
+            >
+              <SellGraphPage
+                vertical={session.businessType.toLowerCase()}
+                onNavigateDiscovery={(productId) => {
+                  if (productId) {
+                    discoveryStore.setFilter({ text: productId });
+                  }
+                  setCurrentRoute('DISCOVERY');
+                }}
+              />
             </div>
           </>
         )}
