@@ -1,12 +1,13 @@
 use crate::database::open_connection;
+pub use crate::discovery::commands::{
+    GraphData, GraphKind, GraphParams, cmd_discover_facets, cmd_discover_products,
+    cmd_refresh_analytics, cmd_sell_graph,
+};
 use crate::posting::{
-    PaymentInput, PostedPayment, PostedPurchase, PostedReturn, PostedSale,
-    PostedSaleWithPayments, PurchaseInput, PurchaseReturnInput, SaleInput,
-    SaleReturnInput, SaleWithPaymentsInput,
+    PaymentInput, PostedPayment, PostedPurchase, PostedReturn, PostedSale, PostedSaleWithPayments,
+    PurchaseInput, PurchaseReturnInput, SaleInput, SaleReturnInput, SaleWithPaymentsInput,
 };
-use crate::reports::{
-    DayBookReport, Gstr1Report, StockSummaryReport, TrialBalanceReport,
-};
+use crate::reports::{DayBookReport, Gstr1Report, StockSummaryReport, TrialBalanceReport};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -90,11 +91,8 @@ pub struct CreateEntityInput {
 /// Initializes the database at `db_path` by applying WAL pragmas and running migrations.
 pub fn cmd_init_database(db_path: String) -> Result<i32, String> {
     let mut conn = open_connection(&db_path).map_err(|e| e.to_string())?;
-    crate::database::migrations::run_migrations(
-        &mut conn,
-        crate::database::migrations::MIGRATIONS,
-    )
-    .map_err(|e| e.to_string())?;
+    crate::database::migrations::run_migrations(&mut conn, crate::database::migrations::MIGRATIONS)
+        .map_err(|e| e.to_string())?;
     crate::database::migrations::get_user_version(&conn).map_err(|e| e.to_string())
 }
 
@@ -248,7 +246,11 @@ pub fn cmd_create_resource(
         .map_err(|e| e.to_string())?;
     let res_id = input.id.unwrap_or_else(|| format!("res_{}", hex_val));
     let cost_price = input.cost_price_paise.unwrap_or(0);
-    let is_tracked = if input.is_stock_tracked.unwrap_or(true) { 1 } else { 0 };
+    let is_tracked = if input.is_stock_tracked.unwrap_or(true) {
+        1
+    } else {
+        0
+    };
 
     tx.execute(
         "INSERT INTO resources (
@@ -270,7 +272,8 @@ pub fn cmd_create_resource(
 
     let mut current_stock = 0;
     if let Some(init_qty) = input.initial_stock_milli
-        && init_qty > 0 && is_tracked == 1
+        && init_qty > 0
+        && is_tracked == 1
     {
         let lot_id = format!("lot_{}", hex_val);
         tx.execute(
@@ -650,7 +653,11 @@ mod tests {
 
         // 4. Verify Ledger is balanced
         let discrepancies = cmd_verify_ledger(db_path.clone()).expect("verify ledger");
-        assert!(discrepancies.is_empty(), "Ledger discrepancies: {:?}", discrepancies);
+        assert!(
+            discrepancies.is_empty(),
+            "Ledger discrepancies: {:?}",
+            discrepancies
+        );
 
         // 5. Query Trial Balance
         let tb = cmd_get_trial_balance(db_path.clone()).expect("get trial balance");
@@ -658,11 +665,13 @@ mod tests {
         assert_eq!(tb.total_debits_paise, tb.total_credits_paise);
 
         // 6. Query Day Book
-        let day_book = cmd_get_day_book(db_path.clone(), "2026-04-15".to_string()).expect("get day book");
+        let day_book =
+            cmd_get_day_book(db_path.clone(), "2026-04-15".to_string()).expect("get day book");
         assert_eq!(day_book.total_sales_paise, 23600);
 
         // 7. Query GSTR-1
-        let gstr1 = cmd_get_gstr1_summary(db_path.clone(), "2026-27".to_string(), Some(4)).expect("gstr1 summary");
+        let gstr1 = cmd_get_gstr1_summary(db_path.clone(), "2026-27".to_string(), Some(4))
+            .expect("gstr1 summary");
         assert_eq!(gstr1.total_taxable_paise, 20000);
         assert_eq!(gstr1.total_cgst_paise, 1800);
         assert_eq!(gstr1.total_sgst_paise, 1800);
@@ -723,7 +732,7 @@ mod tests {
                     batch_number: Some("BATCH-P1".to_string()),
                     expiry_date: None,
                     mrp_paise: Some(2500),
-                    quantity_milli: 10000, // 10 units
+                    quantity_milli: 10000,  // 10 units
                     unit_price_paise: 1500, // 15.00
                     discount_paise: 0,
                     tax_rate_bps: 500,
@@ -764,7 +773,11 @@ mod tests {
 
         // Ledger check
         let discrepancies = cmd_verify_ledger(db_path.clone()).expect("verify ledger");
-        assert!(discrepancies.is_empty(), "Discrepancies found: {:?}", discrepancies);
+        assert!(
+            discrepancies.is_empty(),
+            "Discrepancies found: {:?}",
+            discrepancies
+        );
 
         cleanup_db(&file_path);
     }
@@ -853,7 +866,11 @@ mod tests {
 
         // Ledger check
         let discrepancies = cmd_verify_ledger(db_path.clone()).expect("verify ledger");
-        assert!(discrepancies.is_empty(), "Discrepancies found: {:?}", discrepancies);
+        assert!(
+            discrepancies.is_empty(),
+            "Discrepancies found: {:?}",
+            discrepancies
+        );
 
         cleanup_db(&file_path);
     }

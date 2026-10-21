@@ -742,7 +742,7 @@ fn test_query_time_benchmark_acceptance_a7() {
         return;
     }
 
-    let conn = open_connection(&bench_db_path).unwrap();
+    let conn = open_connection(bench_db_path).unwrap();
     let today = 20580;
 
     // Shape 1: No filter

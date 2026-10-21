@@ -1,8 +1,11 @@
 pub mod clock;
+pub mod commands;
 pub mod cursor;
 pub mod facets;
 pub mod fts;
+pub mod graph;
 pub mod math;
+pub mod pool;
 pub mod query;
 pub mod refresh;
 pub mod rollup;

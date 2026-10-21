@@ -1,5 +1,5 @@
 use omnibill_core::commands::*;
-use omnibill_core::database::migrations::{get_user_version, run_migrations, MIGRATIONS};
+use omnibill_core::database::migrations::{MIGRATIONS, get_user_version, run_migrations};
 use omnibill_core::database::open_connection;
 use std::env;
 use std::io::{Read, Write};
@@ -187,7 +187,10 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                     Ok(sale) => (200, serde_json::to_string(&sale).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
             }
         }
         ("POST", "/api/post_sale_with_payments") => {
@@ -196,7 +199,10 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                     Ok(res) => (200, serde_json::to_string(&res).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
             }
         }
         ("POST", "/api/post_purchase") => {
@@ -205,7 +211,10 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                     Ok(pur) => (200, serde_json::to_string(&pur).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
             }
         }
         ("POST", "/api/post_payment") => {
@@ -214,13 +223,76 @@ fn handle_client(mut stream: TcpStream, db_path: &str) {
                     Ok(pay) => (200, serde_json::to_string(&pay).unwrap_or_default()),
                     Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
                 },
-                Err(e) => (400, serde_json::json!({ "error": e.to_string() }).to_string()),
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
             }
         }
-        _ => (
-            404,
-            serde_json::json!({ "error": "Not Found" }).to_string(),
-        ),
+        ("POST", "/api/discovery/products") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                query: omnibill_core::discovery::query::DiscoveryQuery,
+                vertical: Option<String>,
+            }
+            match serde_json::from_str::<Req>(body) {
+                Ok(r) => match cmd_discover_products(db_path, r.query, r.vertical) {
+                    Ok(page) => (200, serde_json::to_string(&page).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
+        }
+        ("POST", "/api/discovery/facets") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                query: omnibill_core::discovery::query::DiscoveryQuery,
+                vertical: Option<String>,
+            }
+            match serde_json::from_str::<Req>(body) {
+                Ok(r) => match cmd_discover_facets(db_path, r.query, r.vertical) {
+                    Ok(facets) => (200, serde_json::to_string(&facets).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
+        }
+        ("POST", "/api/discovery/sell_graph") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                kind: GraphKind,
+                params: GraphParams,
+                vertical: Option<String>,
+            }
+            match serde_json::from_str::<Req>(body) {
+                Ok(r) => match cmd_sell_graph(db_path, r.kind, r.params, r.vertical) {
+                    Ok(data) => (200, serde_json::to_string(&data).unwrap_or_default()),
+                    Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                },
+                Err(e) => (
+                    400,
+                    serde_json::json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
+        }
+        ("POST", "/api/discovery/refresh") => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                today: Option<i64>,
+            }
+            let req = serde_json::from_str::<Req>(body).unwrap_or(Req { today: None });
+            match cmd_refresh_analytics(db_path, req.today) {
+                Ok(rep) => (200, serde_json::to_string(&rep).unwrap_or_default()),
+                Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+            }
+        }
+        _ => (404, serde_json::json!({ "error": "Not Found" }).to_string()),
     };
 
     let response = format!(

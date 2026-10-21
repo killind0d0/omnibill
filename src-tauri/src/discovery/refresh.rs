@@ -1,6 +1,8 @@
-use rusqlite::{named_params, params, Connection};
+use rusqlite::{Connection, named_params, params};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshReport {
     pub resources_updated: u64,
     pub gmroi_skipped: u64,
