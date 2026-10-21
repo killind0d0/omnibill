@@ -469,6 +469,14 @@ pub fn guarded_dispatch(
                 Err(e) => (400, serde_json::json!({ "error": format!("Invalid JSON: {}", e) }).to_string()),
             }
         }
+        "activate_licence" => {
+            let res = omnibill_core::access::activation::cmd_activate_licence(std::path::Path::new(db_path), args);
+            (200, res)
+        }
+        "owner_reset_with_code" => {
+            let res = omnibill_core::access::owner_reset::cmd_owner_reset_with_code(std::path::Path::new(db_path), args);
+            (200, res)
+        }
         "logout" => {
             match omnibill_core::access::commands::logout(auth_state, bearer, now_ms) {
                 Ok(()) => (200, serde_json::json!({ "status": "logged_out" }).to_string()),

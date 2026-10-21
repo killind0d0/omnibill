@@ -1,6 +1,8 @@
 //! OmniBill Access Control, Authentication, and Licensing Subsystem.
 
+pub mod activation;
 pub mod audit;
+pub mod checkin;
 pub mod civil;
 pub mod clock_guard;
 pub mod commands;
@@ -11,6 +13,7 @@ pub mod escrow;
 pub mod guard;
 pub mod licence;
 pub mod licence_store;
+pub mod owner_reset;
 pub mod password;
 pub mod permissions;
 pub mod policy;
@@ -18,7 +21,9 @@ pub mod policy_table;
 pub mod role_perms;
 pub mod roles;
 pub mod routes;
+pub mod server_url;
 pub mod session;
+pub mod transport;
 pub mod users;
 
 pub use audit::{AuthAuditEvent, clear_audit_events, get_audit_events, record_auth_event};

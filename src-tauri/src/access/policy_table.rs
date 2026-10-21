@@ -120,6 +120,26 @@ pub static COMMAND_POLICY: &[CommandPolicy] = &[
         public: true,
         lan_allowed: false,
     },
+    CommandPolicy {
+        name: "activate_licence",
+        permission: None,
+        feature: None,
+        write: true,
+        export: false,
+        print: false,
+        public: true,
+        lan_allowed: false,
+    },
+    CommandPolicy {
+        name: "owner_reset_with_code",
+        permission: None,
+        feature: None,
+        write: true,
+        export: false,
+        print: false,
+        public: true,
+        lan_allowed: false,
+    },
     // --- Core Auth & Session Management ---
     CommandPolicy {
         name: "logout",

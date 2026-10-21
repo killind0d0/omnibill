@@ -21,6 +21,7 @@ base64 = "0.22"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 keyring = "4.2.0"
 crypto_box = { version = "0.9.1", features = ["seal"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 
 [[bin]]
 name = "omnibill"
