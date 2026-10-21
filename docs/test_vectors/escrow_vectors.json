@@ -1,0 +1,6 @@
+{
+  "TEST_ONLY_escrow_secret_hex": "742f9dadd95e10ba20b74cda76b4b12ca6d45e14513fed4cf49dc5b9a0a72833",
+  "dek_hex": "31620282131c12209e370dbc0c88e7c73a3509bff4bbd45fa79f9c7322e3de08",
+  "escrow_public_hex": "6e06a087f3fb361ee47cd80834453413ac24dbb6077de4f445d88e591e58b128",
+  "sealed_b64": "3pxo+b04OLLIfWVAaLxU2IATNI4/HlyyvkHh6rmq5WgGD+M/sPHOKgOHjb0Hb57uPiQ5XOCUYwBXAEsff2zr47TbXf66fmtFSFzXzyyczYM="
+}

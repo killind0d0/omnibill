@@ -1174,7 +1174,7 @@ mod tests {
     use std::fs;
 
     fn setup_test_db() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         crate::database::apply_pragmas(&conn).unwrap();
         run_migrations(&mut conn, MIGRATIONS).unwrap();
 
@@ -1225,7 +1225,7 @@ mod tests {
     // Connection guard protects against running on insecure raw connections without recursive_triggers or foreign_keys
     #[test]
     fn test_connection_guard_rejects_insecure_connection() {
-        let mut raw_conn = Connection::open_in_memory().unwrap();
+        let mut raw_conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         let input = SaleInput {
             invoice_date: "2026-04-15".to_string(),
             seller_state_code: "27".to_string(),

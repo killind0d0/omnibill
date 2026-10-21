@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rusqlite = { version = "0.31.0", features = ["bundled", "backup"] }
+rusqlite = { version = "0.31.0", features = ["bundled-sqlcipher-vendored-openssl", "backup"] }
 sha2 = "0.10"
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
@@ -19,6 +19,8 @@ zeroize = { version = "1.8", features = ["derive"] }
 rand = "0.8"
 base64 = "0.22"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+keyring = "4.2.0"
+crypto_box = { version = "0.9.1", features = ["seal"] }
 
 [[bin]]
 name = "omnibill"

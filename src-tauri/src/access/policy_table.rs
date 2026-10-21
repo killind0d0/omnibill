@@ -110,6 +110,16 @@ pub static COMMAND_POLICY: &[CommandPolicy] = &[
         public: true,
         lan_allowed: false,
     },
+    CommandPolicy {
+        name: "import_database_key",
+        permission: None,
+        feature: None,
+        write: false,
+        export: false,
+        print: false,
+        public: true,
+        lan_allowed: false,
+    },
     // --- Core Auth & Session Management ---
     CommandPolicy {
         name: "logout",

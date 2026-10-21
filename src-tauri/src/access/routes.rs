@@ -4,6 +4,7 @@
 pub const ROUTES: &[(&str, &str)] = &[
     ("/api/login", "login"),
     ("/api/boot_state", "get_boot_state"),
+    ("/api/import_database_key", "import_database_key"),
     ("/api/logout", "logout"),
     ("/api/change_password", "change_password"),
     ("/api/access_status", "get_access_status"),

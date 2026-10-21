@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_insecure_connection_rejected() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         // Pragmas not applied!
 
         let err = post_payment(

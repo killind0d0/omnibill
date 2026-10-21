@@ -32,7 +32,12 @@ impl ReadOnlyPool {
     /// Creates a dedicated connection opened with SQLITE_OPEN_READ_ONLY and PRAGMA query_only = 1.
     fn create_connection(&self) -> Result<Connection, rusqlite::Error> {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(&self.db_path, flags)?;
+        let key = crate::access::dbkey::default_keystore().get();
+        let conn = crate::access::dbopen::open_database_with_flags(&self.db_path, flags, key.as_ref())
+            .map_err(|e| match e {
+                crate::access::dbopen::DbOpenError::Sqlite(err) => err,
+                other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
+            })?;
         conn.pragma_update(None, "query_only", 1)?;
         conn.busy_timeout(std::time::Duration::from_millis(2000))?;
         Ok(conn)

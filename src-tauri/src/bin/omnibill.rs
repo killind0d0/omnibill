@@ -447,6 +447,28 @@ pub fn guarded_dispatch(
                 Err(e) => (500, serde_json::json!({ "error": e.to_string() }).to_string()),
             }
         }
+        "import_database_key" => {
+            #[derive(serde::Deserialize)]
+            struct Req {
+                hex_key: String,
+            }
+            match serde_json::from_str::<Req>(args) {
+                Ok(r) => {
+                    let db_path_obj = std::path::Path::new(db_path);
+                    let store = omnibill_core::access::dbkey::default_keystore();
+                    match omnibill_core::access::dbopen::import_database_key_impl(
+                        db_path_obj,
+                        &r.hex_key,
+                        store.as_ref(),
+                        now_ms,
+                    ) {
+                        Ok(()) => (200, serde_json::json!({ "success": true }).to_string()),
+                        Err(e) => (400, serde_json::json!({ "error": e }).to_string()),
+                    }
+                }
+                Err(e) => (400, serde_json::json!({ "error": format!("Invalid JSON: {}", e) }).to_string()),
+            }
+        }
         "logout" => {
             match omnibill_core::access::commands::logout(auth_state, bearer, now_ms) {
                 Ok(()) => (200, serde_json::json!({ "status": "logged_out" }).to_string()),
@@ -1016,6 +1038,21 @@ fn main() {
                 .unwrap_or(4000);
             let db_path = args.get(3).map(|s| s.as_str()).unwrap_or(&default_db);
             handle_serve(port, db_path);
+        }
+        "--encrypt-existing-db" => {
+            let db_path = args.get(2).map(|s| s.as_str()).unwrap_or(&default_db);
+            let path_obj = Path::new(db_path);
+            let app_dir = path_obj.parent().unwrap_or(Path::new("."));
+            let store = omnibill_core::access::dbkey::default_keystore();
+            match omnibill_core::access::dbopen::encrypt_existing_database(app_dir, store.as_ref()) {
+                Ok(()) => {
+                    println!("Database successfully encrypted at rest.");
+                }
+                Err(e) => {
+                    eprintln!("Encryption migration failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         "--help" | "-h" => {
             print_help();

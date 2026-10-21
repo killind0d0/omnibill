@@ -1,5 +1,4 @@
 use crate::database::{
-    apply_pragmas,
     migrations::get_user_version,
     queries::{LedgerDiscrepancy, verify_ledger},
 };
@@ -112,6 +111,16 @@ impl From<rusqlite::Error> for BackupError {
 impl From<std::io::Error> for BackupError {
     fn from(err: std::io::Error) -> Self {
         BackupError::Io(err)
+    }
+}
+
+impl From<crate::access::dbopen::DbOpenError> for BackupError {
+    fn from(err: crate::access::dbopen::DbOpenError) -> Self {
+        match err {
+            crate::access::dbopen::DbOpenError::Sqlite(e) => BackupError::Database(e),
+            crate::access::dbopen::DbOpenError::Io(e) => BackupError::Io(e),
+            other => BackupError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(other))),
+        }
     }
 }
 
@@ -247,7 +256,10 @@ pub fn create_backup(
     let _guard = TempFileGuard::new(temp_db_path.clone());
 
     {
-        let mut dst_conn = Connection::open(&temp_db_path)?;
+        let mut dst_conn = crate::access::dbopen::open_database(
+            temp_db_path.to_str().unwrap_or(""),
+            None,
+        )?;
         let backup = rusqlite::backup::Backup::new(src_conn, &mut dst_conn)?;
         backup.run_to_completion(100, Duration::from_millis(1), None)?;
     } // dst_conn is closed and flushed here
@@ -460,8 +472,10 @@ pub fn restore_backup(
     fs::write(&temp_restore_path, &raw_db_bytes)?;
 
     // 9. Verify temporary DB integrity BEFORE touching target DB
-    let src_temp = Connection::open(&temp_restore_path)?;
-    apply_pragmas(&src_temp)?;
+    let src_temp = crate::access::dbopen::open_database(
+        temp_restore_path.to_str().unwrap_or(""),
+        None,
+    )?;
 
     let integrity: String = src_temp.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     if integrity != "ok" {
@@ -492,14 +506,15 @@ pub fn restore_backup(
         fs::create_dir_all(parent)?;
     }
 
+    let key = crate::access::dbkey::default_keystore().get();
+
     {
-        let mut target_conn = Connection::open(target_db_path)?;
+        let mut target_conn = crate::access::dbopen::open_database(target_db_path, key.as_ref())?;
         let backup = rusqlite::backup::Backup::new(&src_temp, &mut target_conn)?;
         backup.run_to_completion(100, Duration::from_millis(1), None)?;
     }
 
-    let target_conn = Connection::open(target_db_path)?;
-    apply_pragmas(&target_conn)?;
+    let _target_conn = crate::access::dbopen::open_database(target_db_path, key.as_ref())?;
 
     Ok(RestoreSummary {
         backup_id,
@@ -538,7 +553,7 @@ mod tests {
     }
 
     fn setup_migrated_populated_db(db_path: &Path) -> Connection {
-        let mut conn = Connection::open(db_path).expect("open test db");
+        let mut conn = crate::access::dbopen::open_database(db_path.to_str().unwrap(), None).expect("open test db");
         apply_pragmas(&conn).expect("apply pragmas");
         run_migrations(&mut conn, MIGRATIONS).expect("run migrations");
 
@@ -662,7 +677,7 @@ mod tests {
         assert_eq!(summary.total_bytes, meta.total_bytes);
 
         // Verify data in the newly restored DB
-        let restored_conn = Connection::open(&restored_db_path).expect("open restored db");
+        let restored_conn = crate::access::dbopen::open_database(restored_db_path.to_str().unwrap(), None).expect("open restored db");
         let biz_name: String = restored_conn
             .query_row(
                 "SELECT legal_name FROM business_profiles WHERE id = 'biz_1'",
@@ -858,7 +873,7 @@ mod tests {
         assert_eq!(summary.backup_id, meta.backup_id);
         assert_eq!(summary.sha256_checksum, meta.sha256_checksum);
 
-        let restored_conn = Connection::open(&restored_db_path).expect("open restored");
+        let restored_conn = crate::access::dbopen::open_database(restored_db_path.to_str().unwrap(), None).expect("open restored");
         let count: i64 = restored_conn
             .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
             .expect("query tx");
@@ -897,7 +912,7 @@ mod tests {
         let conn = setup_migrated_populated_db(&src_db_path);
 
         // Open a secondary connection to simulate a concurrent active reader
-        let reader_conn = Connection::open(&src_db_path).expect("open reader conn");
+        let reader_conn = crate::access::dbopen::open_database(src_db_path.to_str().unwrap(), None).expect("open reader conn");
         apply_pragmas(&reader_conn).expect("apply pragmas reader");
 
         let tx = reader_conn

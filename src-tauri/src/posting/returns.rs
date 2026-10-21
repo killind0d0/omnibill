@@ -1273,7 +1273,7 @@ mod tests {
     use crate::posting::post_sale;
 
     fn setup_test_db() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         crate::database::apply_pragmas(&conn).unwrap();
         run_migrations(&mut conn, MIGRATIONS).unwrap();
 
@@ -1330,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_connection_guard() {
-        let mut raw_conn = Connection::open_in_memory().unwrap();
+        let mut raw_conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         let input = SaleReturnInput {
             return_date: "2026-04-16".to_string(),
             original_transaction_id: "tx_dummy".to_string(),

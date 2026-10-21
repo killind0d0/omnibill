@@ -11,9 +11,13 @@ use std::path::Path;
 /// - busy_timeout = 5000
 /// - recursive_triggers = ON
 pub fn open_connection<P: AsRef<Path>>(path: P) -> Result<Connection> {
-    let conn = Connection::open(path)?;
-    apply_pragmas(&conn)?;
-    Ok(conn)
+    let p_str = path.as_ref().to_str().unwrap_or("");
+    let key = crate::access::dbkey::default_keystore().get();
+    crate::access::dbopen::open_database(p_str, key.as_ref())
+        .map_err(|e| match e {
+            crate::access::dbopen::DbOpenError::Sqlite(err) => err,
+            other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
+        })
 }
 
 /// Applies required PRAGMAs on every connection.
@@ -37,7 +41,7 @@ mod tests {
     use std::fs;
 
     fn setup_migrated_in_memory_db() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         apply_pragmas(&conn).unwrap();
         run_migrations(&mut conn, MIGRATIONS).unwrap();
         conn
@@ -89,7 +93,7 @@ mod tests {
     // 1. fresh DB migrates to the latest user_version
     #[test]
     fn test_1_fresh_db_migrates_to_latest_user_version() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         apply_pragmas(&conn).unwrap();
 
         let initial_version = get_user_version(&conn).unwrap();
@@ -107,7 +111,7 @@ mod tests {
     // 2. running migrations twice changes nothing
     #[test]
     fn test_2_running_migrations_twice_is_noop() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         apply_pragmas(&conn).unwrap();
 
         run_migrations(&mut conn, MIGRATIONS).unwrap();
@@ -943,7 +947,7 @@ mod tests {
     // 17. a failing migration leaves the DB and user_version unchanged
     #[test]
     fn test_17_failing_migration_leaves_db_and_user_version_unchanged() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         apply_pragmas(&conn).unwrap();
 
         let test_migrations = [
@@ -1475,7 +1479,7 @@ mod tests {
     // 25. upgrade path: migrate empty DB to v2 with slice [m1, m2], then run full MIGRATIONS list and assert v3
     #[test]
     fn test_25_upgrade_path_v2_to_v3() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         apply_pragmas(&conn).unwrap();
 
         // Step 1: Migrate empty DB to v2 with slice [m1, m2]
@@ -2087,7 +2091,7 @@ mod tests {
     // 32. database with user_version 99 makes run_migrations return Err, unchanged
     #[test]
     fn test_32_user_version_higher_than_slice_returns_err() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap(); /* cfg(test) */
         apply_pragmas(&conn).unwrap();
 
         // Set user_version to 99
