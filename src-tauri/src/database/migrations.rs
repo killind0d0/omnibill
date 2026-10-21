@@ -6,8 +6,10 @@ pub mod migration_5;
 pub mod migration_6;
 #[path = "migration_7.rs"]
 pub mod migration_7;
+#[path = "migration_8.rs"]
+pub mod migration_8;
 
-pub const LATEST_VERSION: i32 = 7;
+pub const LATEST_VERSION: i32 = 8;
 
 pub struct Migration {
     pub version: i32,
@@ -50,6 +52,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 7,
         description: "Alerts table for expiry, stockout, dead stock, and reorder alerts",
         sql: migration_7::MIGRATION_7_SQL,
+    },
+    Migration {
+        version: 8,
+        description: "Local auth schema: app_users and app_state",
+        sql: migration_8::MIGRATION_8_SQL,
     },
 ];
 
