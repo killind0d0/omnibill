@@ -17,8 +17,9 @@ use super::password::{
 };
 use super::policy::{LOCKOUT_FAILED_ATTEMPTS, LOCKOUT_MINUTES, is_role_valid_for_vertical};
 use super::session::SessionManager;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
     pub id: i64,
     pub username: String,
@@ -28,7 +29,7 @@ pub struct AuthenticatedUser {
     pub must_change_password: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserRecord {
     pub id: i64,
     pub username: String,

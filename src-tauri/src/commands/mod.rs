@@ -326,6 +326,7 @@ pub fn cmd_create_resource(
 // ============================================================================
 
 /// Guarded execution for database migrations command.
+// #[tauri::command]
 pub fn cmd_init_database_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -343,6 +344,7 @@ pub fn cmd_init_database_guarded(
 }
 
 /// Guarded execution for ledger verification command.
+// #[tauri::command]
 pub fn cmd_verify_ledger_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -360,6 +362,7 @@ pub fn cmd_verify_ledger_guarded(
 }
 
 /// Guarded execution for sales posting.
+// #[tauri::command]
 pub fn cmd_post_sale_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -373,6 +376,7 @@ pub fn cmd_post_sale_guarded(
 }
 
 /// Guarded execution for sales posting with payments.
+// #[tauri::command]
 pub fn cmd_post_sale_with_payments_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -391,6 +395,7 @@ pub fn cmd_post_sale_with_payments_guarded(
 }
 
 /// Guarded execution for purchase posting.
+// #[tauri::command]
 pub fn cmd_post_purchase_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -409,6 +414,7 @@ pub fn cmd_post_purchase_guarded(
 }
 
 /// Guarded execution for payment posting.
+// #[tauri::command]
 pub fn cmd_post_payment_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -422,6 +428,7 @@ pub fn cmd_post_payment_guarded(
 }
 
 /// Guarded execution for sales return posting.
+// #[tauri::command]
 pub fn cmd_post_sale_return_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -440,6 +447,7 @@ pub fn cmd_post_sale_return_guarded(
 }
 
 /// Guarded execution for purchase return posting.
+// #[tauri::command]
 pub fn cmd_post_purchase_return_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -458,6 +466,7 @@ pub fn cmd_post_purchase_return_guarded(
 }
 
 /// Guarded execution for retrieving resources list.
+// #[tauri::command]
 pub fn cmd_get_resources_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -475,6 +484,7 @@ pub fn cmd_get_resources_guarded(
 }
 
 /// Guarded execution for resource creation.
+// #[tauri::command]
 pub fn cmd_create_resource_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -613,6 +623,7 @@ pub fn cmd_get_stock_summary(db_path: String) -> Result<StockSummaryReport, Stri
 // ============================================================================
 
 /// Guarded execution for retrieving entities list.
+// #[tauri::command]
 pub fn cmd_get_entities_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -630,6 +641,7 @@ pub fn cmd_get_entities_guarded(
 }
 
 /// Guarded execution for creating an entity.
+// #[tauri::command]
 pub fn cmd_create_entity_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -648,6 +660,7 @@ pub fn cmd_create_entity_guarded(
 }
 
 /// Guarded execution for trial balance report.
+// #[tauri::command]
 pub fn cmd_get_trial_balance_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -665,6 +678,7 @@ pub fn cmd_get_trial_balance_guarded(
 }
 
 /// Guarded execution for day book report.
+// #[tauri::command]
 pub fn cmd_get_day_book_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -678,6 +692,7 @@ pub fn cmd_get_day_book_guarded(
 }
 
 /// Guarded execution for GSTR-1 report.
+// #[tauri::command]
 pub fn cmd_get_gstr1_summary_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -692,6 +707,7 @@ pub fn cmd_get_gstr1_summary_guarded(
 }
 
 /// Guarded execution for stock summary report.
+// #[tauri::command]
 pub fn cmd_get_stock_summary_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -707,6 +723,205 @@ pub fn cmd_get_stock_summary_guarded(
     .map_err(|e| e.to_string())?;
     cmd_get_stock_summary(db_path)
 }
+
+// ============================================================================
+// Guarded IPC Hardware & Additional Commands
+// ============================================================================
+
+/// Guarded execution for creating backup.
+// #[tauri::command]
+pub fn cmd_backup_create_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    backup_path: String,
+    passphrase: Option<String>,
+    now_ms: i64,
+) -> Result<crate::hardware::backup::BackupMetadata, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_backup_create",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    let conn = open_connection(&db_path).map_err(|e| e.to_string())?;
+    crate::hardware::backup::create_backup(&conn, &backup_path, passphrase.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Guarded execution for restoring backup.
+// #[tauri::command]
+pub fn cmd_backup_restore_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    backup_path: String,
+    db_path: String,
+    passphrase: Option<String>,
+    now_ms: i64,
+) -> Result<crate::hardware::backup::RestoreSummary, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_backup_restore",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    crate::hardware::backup::restore_backup(&backup_path, &db_path, passphrase.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Guarded execution for receipt printing.
+// #[tauri::command]
+pub fn cmd_print_receipt_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    data: crate::hardware::printer::ReceiptData,
+    width: crate::hardware::printer::PaperWidth,
+    now_ms: i64,
+) -> Result<Vec<u8>, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_print_receipt",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(crate::hardware::printer::generate_escpos_bytes(
+        &data, width,
+    ))
+}
+
+/// Guarded execution for customer payment collection.
+// #[tauri::command]
+pub fn cmd_collect_customer_payment_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: PaymentInput,
+    now_ms: i64,
+) -> Result<PostedPayment, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_collect_customer_payment",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_payment(db_path, input)
+}
+
+/// Guarded execution for supplier payout disbursement.
+// #[tauri::command]
+pub fn cmd_disburse_supplier_payout_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: PaymentInput,
+    now_ms: i64,
+) -> Result<PostedPayment, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_disburse_supplier_payout",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_payment(db_path, input)
+}
+
+/// Guarded execution for purchase stock expense recording.
+// #[tauri::command]
+pub fn cmd_record_purchase_stock_expense_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    input: PurchaseInput,
+    now_ms: i64,
+) -> Result<PostedPurchase, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_record_purchase_stock_expense",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    cmd_post_purchase(db_path, input)
+}
+
+/// Guarded execution for schema version query.
+// #[tauri::command]
+pub fn cmd_get_schema_version_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: String,
+    now_ms: i64,
+) -> Result<i32, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_get_schema_version",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    let conn = open_connection(&db_path).map_err(|e| e.to_string())?;
+    crate::database::migrations::get_user_version(&conn).map_err(|e| e.to_string())
+}
+
+#[macro_export]
+macro_rules! generate_handler {
+    ($($cmd:ident),* $(,)?) => {
+        pub static REGISTERED_COMMAND_HANDLERS: &[&str] = &[
+            $(stringify!($cmd)),*
+        ];
+    };
+}
+
+generate_handler![
+    login,
+    get_boot_state,
+    logout,
+    change_password,
+    get_access_status,
+    cmd_run_migrations,
+    cmd_get_schema_version,
+    cmd_verify_ledger,
+    cmd_record_entity,
+    cmd_list_entities,
+    cmd_record_resource,
+    cmd_list_resources,
+    cmd_post_sale,
+    cmd_post_sale_with_payments,
+    cmd_collect_customer_payment,
+    cmd_post_payment,
+    cmd_post_purchase,
+    cmd_disburse_supplier_payout,
+    cmd_post_sale_return,
+    cmd_post_purchase_return,
+    cmd_get_day_book,
+    cmd_get_trial_balance,
+    cmd_get_stock_summary,
+    cmd_get_gstr1,
+    cmd_discover_products,
+    cmd_discover_facets,
+    cmd_get_filter_facets,
+    cmd_sell_graph,
+    cmd_get_sell_graph_data,
+    cmd_get_product_detail,
+    cmd_record_purchase_stock_expense,
+    cmd_refresh_analytics,
+    cmd_rebuild_analytics,
+    cmd_generate_alerts,
+    cmd_list_alerts,
+    cmd_get_discovery_alerts,
+    cmd_acknowledge_alert,
+    cmd_acknowledge_discovery_alert,
+    cmd_export_discovery,
+    cmd_day_summary_text,
+    cmd_backup_create,
+    cmd_backup_restore,
+    cmd_print_receipt,
+];
 
 // ============================================================================
 // Tests

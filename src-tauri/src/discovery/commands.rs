@@ -204,6 +204,7 @@ pub fn cmd_refresh_analytics(db_path: &str, today: Option<i64>) -> Result<Refres
 // ============================================================================
 
 /// Guarded execution for product discovery.
+// #[tauri::command]
 pub fn cmd_discover_products_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -223,6 +224,7 @@ pub fn cmd_discover_products_guarded(
 }
 
 /// Guarded execution for facet discovery.
+// #[tauri::command]
 pub fn cmd_discover_facets_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -242,6 +244,7 @@ pub fn cmd_discover_facets_guarded(
 }
 
 /// Guarded execution for sell graph data.
+// #[tauri::command]
 pub fn cmd_sell_graph_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -257,6 +260,7 @@ pub fn cmd_sell_graph_guarded(
 }
 
 /// Guarded execution for analytics refresh.
+// #[tauri::command]
 pub fn cmd_refresh_analytics_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -272,6 +276,51 @@ pub fn cmd_refresh_analytics_guarded(
     )
     .map_err(|e| e.to_string())?;
     cmd_refresh_analytics(db_path, today)
+}
+
+/// Guarded execution for analytics rebuild.
+// #[tauri::command]
+pub fn cmd_rebuild_analytics_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    now_ms: i64,
+) -> Result<crate::discovery::rollup::RebuildReport, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_rebuild_analytics",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    let conn = crate::database::open_connection(db_path).map_err(|e| e.to_string())?;
+    crate::discovery::rollup::rebuild_rollups(&conn).map_err(|e| e.to_string())
+}
+
+/// Guarded execution for getting a single product's detail from discovery.
+// #[tauri::command]
+pub fn cmd_get_product_detail_guarded(
+    state: &AppAuthState,
+    token: Option<&str>,
+    db_path: &str,
+    resource_id: &str,
+    vertical: Option<String>,
+    now_ms: i64,
+) -> Result<Option<crate::discovery::query::ProductDiscoveryItem>, String> {
+    let _auth = authorize(
+        &state.as_guard_context(),
+        token,
+        "cmd_get_product_detail",
+        now_ms,
+    )
+    .map_err(|e| e.to_string())?;
+    let q = DiscoveryQuery {
+        text: Some(resource_id.to_string()),
+        limit: 1,
+        ..Default::default()
+    };
+    let page = cmd_discover_products(db_path, q, vertical)?;
+    Ok(page.items.into_iter().next())
 }
 
 /// Generates day-close and risk alerts.
@@ -369,6 +418,7 @@ pub fn cmd_day_summary_text(
 // ============================================================================
 
 /// Guarded execution for generating alerts.
+// #[tauri::command]
 pub fn cmd_generate_alerts_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -388,6 +438,7 @@ pub fn cmd_generate_alerts_guarded(
 }
 
 /// Guarded execution for listing alerts.
+// #[tauri::command]
 pub fn cmd_list_alerts_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -401,6 +452,7 @@ pub fn cmd_list_alerts_guarded(
 }
 
 /// Guarded execution for acknowledging an alert.
+// #[tauri::command]
 pub fn cmd_acknowledge_alert_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -421,6 +473,7 @@ pub fn cmd_acknowledge_alert_guarded(
 
 /// Guarded execution for discovery export (CSV).
 #[allow(clippy::too_many_arguments)]
+// #[tauri::command]
 pub fn cmd_export_discovery_guarded(
     state: &AppAuthState,
     token: Option<&str>,
@@ -442,6 +495,7 @@ pub fn cmd_export_discovery_guarded(
 }
 
 /// Guarded execution for day summary text export (WhatsApp text).
+// #[tauri::command]
 pub fn cmd_day_summary_text_guarded(
     state: &AppAuthState,
     token: Option<&str>,

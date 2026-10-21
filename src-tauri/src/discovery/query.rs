@@ -1,5 +1,5 @@
-use crate::discovery::cursor::{decode_cursor, encode_cursor, CursorError, CursorVal};
-use rusqlite::{types::ToSqlOutput, Connection, ToSql};
+use crate::discovery::cursor::{CursorError, CursorVal, decode_cursor, encode_cursor};
+use rusqlite::{Connection, ToSql, types::ToSqlOutput};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
@@ -108,6 +108,30 @@ pub struct DiscoveryQuery {
 
 fn default_limit() -> u32 {
     50
+}
+
+impl Default for DiscoveryQuery {
+    fn default() -> Self {
+        Self {
+            text: None,
+            brand_ids: Vec::new(),
+            supplier_ids: Vec::new(),
+            category_ids: Vec::new(),
+            tax_bp: Vec::new(),
+            sell_paise: None,
+            cost_paise: None,
+            margin_bp: None,
+            stock_milli: None,
+            received_day: None,
+            last_sold_day: None,
+            expiry_day: None,
+            preset: None,
+            abc: Vec::new(),
+            sort: Vec::new(),
+            limit: default_limit(),
+            cursor: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

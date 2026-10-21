@@ -1,6 +1,7 @@
 //! OmniBill Access Control, Authentication, and Licensing Subsystem.
 
 pub mod audit;
+pub mod commands;
 pub mod guard;
 pub mod password;
 pub mod permissions;
