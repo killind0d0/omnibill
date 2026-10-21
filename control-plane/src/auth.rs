@@ -488,6 +488,17 @@ pub fn validate_session(
     Ok(admin_id)
 }
 
+pub fn invalidate_session(conn: &Connection, token_hex: &str) -> Result<(), AuthError> {
+    let mut hasher = Sha256::new();
+    hasher.update(token_hex.trim().as_bytes());
+    let token_hash: [u8; 32] = hasher.finalize().into();
+    let _ = conn.execute(
+        "DELETE FROM admin_sessions WHERE id_hash = ?1",
+        params![token_hash.as_slice()],
+    );
+    Ok(())
+}
+
 pub fn check_mutating_admin_header(method: &Method, headers: &HeaderMap) -> Result<(), AuthError> {
     if method == Method::POST
         || method == Method::PUT

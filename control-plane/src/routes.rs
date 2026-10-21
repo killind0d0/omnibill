@@ -15,8 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::activate::{handle_activation, ActivatePayload};
 use crate::auth::{
-    check_mutating_admin_header, validate_session, verify_admin_login, AuthError, LoginPayload,
-    LoginSuccess,
+    check_mutating_admin_header, invalidate_session, validate_session, verify_admin_login,
+    AuthError, LoginPayload, LoginSuccess,
 };
 use crate::checkin::{handle_checkin, CheckinPayload};
 use crate::db::{open_db, verify_chain};
@@ -28,6 +28,7 @@ use crate::tenants::{
     create_tenant, generate_temp_password, get_tenant, list_tenants, CreateTenantPayload,
     OWNER_RESET_VALID_HOURS,
 };
+use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -50,13 +51,14 @@ pub async fn admin_mutating_header_middleware(
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let mut router = Router::new()
         // Client endpoints
         .route("/v1/activate", post(activate_handler))
         .route("/v1/checkin", post(checkin_handler))
         .route("/v1/owner-reset", post(owner_reset_handler))
         // Admin auth endpoints
         .route("/v1/admin/login", post(admin_login_handler))
+        .route("/v1/admin/logout", post(admin_logout_handler))
         .route("/v1/admin/me", get(admin_me_handler))
         .route("/v1/admin/test-mutation", post(admin_test_mutation_handler))
         // Admin tenant management
@@ -74,7 +76,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/v1/admin/tenants/{id}/mark-paid", post(admin_mark_paid_handler))
         .route("/v1/admin/tenants/{id}/escrow", post(admin_download_escrow_handler))
         // Settings, usage & audit
+        .route("/v1/admin/settings/support-text", get(admin_get_support_text_handler))
         .route("/v1/admin/settings/support-text", post(admin_set_support_text_handler))
+        .route("/v1/admin/support-text", get(admin_get_support_text_handler))
         .route("/v1/admin/support-text", post(admin_set_support_text_handler))
         .route("/v1/admin/usage", get(admin_list_usage_handler))
         .route("/v1/admin/audit", get(admin_list_audit_handler))
@@ -82,7 +86,24 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Middlewares
         .layer(middleware::from_fn(admin_mutating_header_middleware))
         .layer(DefaultBodyLimit::max(16 * 1024)) // 16 KB everywhere
-        .with_state(state)
+        .with_state(state);
+
+    let dist_dir = std::env::var("OMNIBILL_WEB_DIST")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("control-plane/web/dist"));
+
+    if dist_dir.exists() {
+        let index_file = dist_dir.join("index.html");
+        if index_file.exists() {
+            router = router.fallback_service(
+                ServeDir::new(&dist_dir).fallback(ServeFile::new(index_file)),
+            );
+        } else {
+            router = router.fallback_service(ServeDir::new(&dist_dir));
+        }
+    }
+
+    router
 }
 
 const DEFAULT_PEER: std::net::SocketAddr =
@@ -288,6 +309,30 @@ async fn admin_login_handler(
             .map_err(|_| AuthError::Crypto("Cookie parse error".into()))?,
     );
 
+    Ok(response)
+}
+
+async fn admin_logout_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, AuthError> {
+    let conn = open_db(&state.db_path).map_err(AuthError::Db)?;
+    if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()) {
+        for pair in cookie_header.split(';') {
+            let mut parts = pair.trim().splitn(2, '=');
+            if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+                if k == "admin_session" {
+                    let _ = invalidate_session(&conn, v);
+                }
+            }
+        }
+    }
+
+    let cookie = "admin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0";
+    let mut response = (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response();
+    if let Ok(c) = cookie.parse() {
+        response.headers_mut().insert(header::SET_COOKIE, c);
+    }
     Ok(response)
 }
 
@@ -764,6 +809,17 @@ async fn admin_download_escrow_handler(
 #[derive(Debug, Deserialize)]
 pub struct SupportTextPayload {
     pub text: String,
+}
+
+async fn admin_get_support_text_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, AuthError> {
+    let now_ms = get_now_ms();
+    let conn = open_db(&state.db_path).map_err(AuthError::Db)?;
+    let _ = extract_admin_session(&conn, &headers, now_ms)?;
+    let text = crate::settings::get_support_text(&conn);
+    Ok((StatusCode::OK, Json(serde_json::json!({ "text": text }))).into_response())
 }
 
 async fn admin_set_support_text_handler(
