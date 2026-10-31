@@ -15,8 +15,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [githubToken, setGithubToken] = useState(() => GithubSyncService.getConfig().token || '');
-  const [rememberToken, setRememberToken] = useState(true);
-  const [showTokenInput, setShowTokenInput] = useState(false);
+  const [showTokenInput, setShowTokenInput] = useState(true);
   const [error, setError] = useState(errorMessage || '');
   const [loading, setLoading] = useState(false);
 
