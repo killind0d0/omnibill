@@ -40,10 +40,12 @@ export interface DeviceItem {
 }
 
 export interface AuditEntry {
-  id: number;
+  id: number | string;
   seq?: number;
   prev_hash?: string;
   event_hash?: string;
+  hash?: string;
+  commit_url?: string;
   admin_id: number | null;
   admin_username?: string;
   action?: string;
