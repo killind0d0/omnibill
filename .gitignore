@@ -21,3 +21,5 @@ control-plane/*.db*
 *.log
 scripts/screenshots/
 *.png
+!ui/public/*.png
+!ui/public/**/*.png
