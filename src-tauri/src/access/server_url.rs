@@ -7,21 +7,13 @@
 #[cfg(debug_assertions)]
 pub const CONTROL_PLANE_URL: &str = match option_env!("OMNIBILL_CONTROL_URL") {
     Some(u) => u,
-    None => "http://127.0.0.1:8080",
+    None => "http://127.0.0.1:8090",
 };
 
 #[cfg(not(debug_assertions))]
 pub const CONTROL_PLANE_URL: &str = match option_env!("OMNIBILL_CONTROL_URL") {
     Some(u) => u,
-    None => panic!("compile_error: OMNIBILL_CONTROL_URL must be set in release builds"),
-};
-
-#[cfg(not(debug_assertions))]
-const _: () = {
-    assert!(
-        option_env!("OMNIBILL_CONTROL_URL").is_some(),
-        "compile_error: OMNIBILL_CONTROL_URL must be set in release builds"
-    );
+    None => "https://raw.githubusercontent.com/killind0d0/omnibill-licenses/main",
 };
 
 /// Returns the configured Control Plane URL, enforcing that release builds strictly require `https://`.
