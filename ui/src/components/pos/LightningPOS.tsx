@@ -37,7 +37,13 @@ import { ShiftSettlementModal } from './ShiftSettlementModal';
 import { CatalogImporterModal } from '../importer/CatalogImporterModal';
 import { HeldBillsModal, HeldBill } from './HeldBillsModal';
 import { PriceCheckModal } from './PriceCheckModal';
-import { Sparkles, Upload } from 'lucide-react';
+import { LiveSupportModal } from '../../features/support/LiveSupportModal';
+import { StoreProfileModal } from '../common/StoreProfileModal';
+import { SupervisorPinModal } from './SupervisorPinModal';
+import { ConfirmClearModal } from './ConfirmClearModal';
+import { UnmappedBarcodeModal } from './UnmappedBarcodeModal';
+import { ErpStorageService } from '../../lib/erpStorage';
+import { Sparkles, Upload, RotateCcw } from 'lucide-react';
 
 const HELD_BILLS_STORAGE_KEY = 'omnibill_held_bills';
 
@@ -48,6 +54,17 @@ const getInitialHeldBills = (): HeldBill[] => {
   } catch {
     return [];
   }
+};
+
+const getActiveUserRole = (): string => {
+  try {
+    const raw = localStorage.getItem('omnibill_active_session');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return parsed.operatorRole || 'OWNER';
+    }
+  } catch {}
+  return 'OWNER';
 };
 
 export const LightningPOS: React.FC = () => {
@@ -61,13 +78,24 @@ export const LightningPOS: React.FC = () => {
   );
   const [products, setProducts] = useState<ResourceItem[]>([]);
 
-  // Cart & Pricing State
-  const [cartItems, setCartItems] = useState<CartLineItem[]>([]);
+  // Cart & Pricing State (CF-19: Restored from localStorage across reloads/power crash)
+  const [cartItems, setCartItems] = useState<CartLineItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('omnibill_active_cart');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [];
+  });
   const [selectedRowIndex, setSelectedRowIndex] = useState<number>(0);
   const [priceMode, setPriceMode] = useState<PriceMode>('EXCLUSIVE');
   const [placeOfSupplyStateCode, setPlaceOfSupplyStateCode] = useState<string>(
     business.state_code || '27'
   );
+  // F2 Instant Return / Exchange Mode State
+  const [isReturnMode, setIsReturnMode] = useState<boolean>(false);
 
   // Customer State
   const [customerPhone, setCustomerPhone] = useState('');
@@ -89,6 +117,16 @@ export const LightningPOS: React.FC = () => {
   const [isImporterOpen, setIsImporterOpen] = useState(false);
   const [isHeldBillsOpen, setIsHeldBillsOpen] = useState(false);
   const [isPriceCheckOpen, setIsPriceCheckOpen] = useState(false);
+  const [isLiveSupportOpen, setIsLiveSupportOpen] = useState(false);
+
+  // CF-01, CF-02, CF-06, CF-15 Modals & Dialogs
+  const [isStoreProfileOpen, setIsStoreProfileOpen] = useState(false);
+  const [isSupervisorPinOpen, setIsSupervisorPinOpen] = useState(false);
+  const [supervisorAction, setSupervisorAction] = useState<'CLEAR_CART' | 'OVERRIDE_PRICE' | 'HIGH_DISCOUNT' | null>(null);
+  const [pendingPriceOverride, setPendingPriceOverride] = useState<{ index: number; newPaise: number } | null>(null);
+  const [isConfirmClearOpen, setIsConfirmClearOpen] = useState(false);
+  const [isUnmappedBarcodeOpen, setIsUnmappedBarcodeOpen] = useState(false);
+  const [unmappedBarcodeValue, setUnmappedBarcodeValue] = useState('');
 
   // Held / Suspended Bills State
   const [heldBills, setHeldBills] = useState<HeldBill[]>(getInitialHeldBills);
@@ -98,6 +136,17 @@ export const LightningPOS: React.FC = () => {
       localStorage.setItem(HELD_BILLS_STORAGE_KEY, JSON.stringify(heldBills));
     } catch {}
   }, [heldBills]);
+
+  // CF-19: Synchronize active cart to persistent storage
+  useEffect(() => {
+    try {
+      if (cartItems.length > 0) {
+        localStorage.setItem('omnibill_active_cart', JSON.stringify(cartItems));
+      } else {
+        localStorage.removeItem('omnibill_active_cart');
+      }
+    } catch {}
+  }, [cartItems]);
 
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -129,6 +178,21 @@ export const LightningPOS: React.FC = () => {
       setBusiness(prof);
       setPlaceOfSupplyStateCode(prof.state_code || '27');
     });
+
+    const handleSync = () => {
+      refreshProducts();
+    };
+    const handleProfileSync = (e: any) => {
+      const prof = e?.detail || posStorage.getBusinessProfile();
+      setBusiness(prof);
+      setPlaceOfSupplyStateCode(prof.state_code || '27');
+    };
+    window.addEventListener('omnibill_catalog_sync', handleSync);
+    window.addEventListener('omnibill_profile_sync', handleProfileSync);
+    return () => {
+      window.removeEventListener('omnibill_catalog_sync', handleSync);
+      window.removeEventListener('omnibill_profile_sync', handleProfileSync);
+    };
   }, [refreshProducts]);
 
   const isIntraState = placeOfSupplyStateCode === business.state_code;
@@ -145,17 +209,41 @@ export const LightningPOS: React.FC = () => {
 
   // Add product to cart helper
   const addProductToCart = useCallback(
-    (product: ResourceItem, qtyMilli = 1000, customUnitPricePaise?: number) => {
+    (product: ResourceItem, qtyMilli = 1000, customUnitPricePaise?: number, forceReturn?: boolean) => {
+      const isReturn = forceReturn !== undefined ? forceReturn : isReturnMode;
+
+      // CF-12: Overselling / low stock warning banner
+      if (!isReturn && product.stock_milli !== undefined && product.stock_milli >= 0) {
+        if (qtyMilli > product.stock_milli) {
+          showToast(
+            `⚠️ Low Stock Alert: Selling ${(qtyMilli / 1000).toFixed(0)} units with only ${(
+              product.stock_milli / 1000
+            ).toFixed(0)} in stock!`
+          );
+        }
+      }
+
       setCartItems((prev) => {
-        const existingIdx = prev.findIndex((i) => i.resource_id === product.id);
+        const existingIdx = prev.findIndex((i) => i.resource_id === product.id && !!i.is_return === isReturn);
         const unitPrice = customUnitPricePaise ?? product.base_price_paise;
 
         if (existingIdx >= 0) {
           const updated = [...prev];
           const curr = updated[existingIdx];
+          const newQty = curr.quantity_milli + qtyMilli;
+
+          // CF-12: Warn if cumulative qty exceeds on-hand stock
+          if (!isReturn && product.stock_milli !== undefined && product.stock_milli >= 0 && newQty > product.stock_milli) {
+            showToast(
+              `⚠️ Stock Warning: Total ${(newQty / 1000).toFixed(0)} units exceeds available stock (${(
+                product.stock_milli / 1000
+              ).toFixed(0)})`
+            );
+          }
+
           updated[existingIdx] = {
             ...curr,
-            quantity_milli: curr.quantity_milli + qtyMilli,
+            quantity_milli: newQty,
             unit_price_paise: unitPrice,
           };
           setSelectedRowIndex(existingIdx);
@@ -174,6 +262,9 @@ export const LightningPOS: React.FC = () => {
           unit_price_paise: unitPrice,
           discount_paise: 0,
           tax_rate_bps: product.tax_rate_bps,
+          is_return: isReturn,
+          expiry_date: product.expiry_date,
+          batch_number: product.batch_number,
           gross_paise: 0,
           taxable_paise: 0,
           cgst_paise: 0,
@@ -187,10 +278,22 @@ export const LightningPOS: React.FC = () => {
         return next;
       });
 
-      showToast(`Added: ${product.name} (${formatPaise(customUnitPricePaise ?? product.base_price_paise)})`);
+      showToast(`${isReturn ? '[RETURN] ' : 'Added: '}${product.name} (${formatPaise(customUnitPricePaise ?? product.base_price_paise)})`);
     },
-    [showToast]
+    [isReturnMode, showToast]
   );
+
+  const handleToggleReturn = useCallback((index: number) => {
+    setCartItems((prev) => {
+      const updated = [...prev];
+      if (updated[index]) {
+        const nextState = !updated[index].is_return;
+        updated[index] = { ...updated[index], is_return: nextState };
+        showToast(`Line #${index + 1} marked as ${nextState ? 'RETURN' : 'SALE'}`);
+      }
+      return updated;
+    });
+  }, [showToast]);
 
   // Barcode Scanner Keyboard-Wedge Listener with 300ms debounce
   useBarcodeScanner({
@@ -202,7 +305,11 @@ export const LightningPOS: React.FC = () => {
       !isDateModalOpen &&
       !isSearchOpen &&
       !isHeldBillsOpen &&
-      !isPriceCheckOpen,
+      !isPriceCheckOpen &&
+      !isUnmappedBarcodeOpen &&
+      !isSupervisorPinOpen &&
+      !isConfirmClearOpen &&
+      !isStoreProfileOpen,
     debounceMs: 300,
     onScan: (barcode) => {
       setNumpadValue('');
@@ -213,8 +320,10 @@ export const LightningPOS: React.FC = () => {
         posSound.playScan();
         addProductToCart(found, 1000);
       } else {
+        // CF-01: Prompt to add or map unknown barcode instead of failing silently or using astronomical price
         posSound.playWarning();
-        showToast(`Barcode not found: ${barcode}`);
+        setUnmappedBarcodeValue(barcode);
+        setIsUnmappedBarcodeOpen(true);
       }
     },
   });
@@ -244,6 +353,12 @@ export const LightningPOS: React.FC = () => {
         });
         showToast(`Updated line #${selectedRowIndex + 1}: ${parts[0]} x ₹${parts[1]}`);
       } else {
+        // CF-01: Enforce ₹50,000 upper sanity ceiling on ad-hoc line items
+        if (pricePaise > 5000000) {
+          posSound.playWarning();
+          showToast('⚠️ Maximum price for ad-hoc items is ₹50,000.00.');
+          return;
+        }
         // Create an ad-hoc quick sale item
         const genericProd: ResourceItem = {
           id: 'custom_' + Date.now(),
@@ -263,7 +378,16 @@ export const LightningPOS: React.FC = () => {
       return;
     }
 
-    // Check if it's a barcode or SKU
+    // CF-25: Direct HSN search support
+    const byHsn = products.find((p) => p.hsn === trimmed);
+    if (byHsn) {
+      posSound.playScan();
+      addProductToCart(byHsn, 1000);
+      setNumpadValue('');
+      return;
+    }
+
+    // Check if it's an existing registered barcode or SKU
     const found = products.find(
       (p) =>
         p.barcode.toLowerCase() === trimmed.toLowerCase() ||
@@ -271,14 +395,32 @@ export const LightningPOS: React.FC = () => {
     );
 
     if (found) {
+      posSound.playScan();
       addProductToCart(found, 1000);
       setNumpadValue('');
       return;
     }
 
-    // Check if numeric price only
+    // CF-01: Check if input is a barcode format (6+ digits or alphanumeric barcode)
+    // NEVER evaluate unmapped barcodes as price!
+    const looksLikeBarcode = /^\d{6,}$/.test(trimmed) || /^[A-Za-z0-9_-]{7,}$/.test(trimmed);
+    if (looksLikeBarcode) {
+      posSound.playWarning();
+      setUnmappedBarcodeValue(trimmed);
+      setIsUnmappedBarcodeOpen(true);
+      setNumpadValue('');
+      return;
+    }
+
+    // Check if numeric price only (strictly capped at ₹50,000 for ad-hoc misc)
     const numPrice = parseFloat(trimmed);
     if (!isNaN(numPrice) && numPrice > 0) {
+      if (numPrice > 50000) {
+        posSound.playWarning();
+        showToast('⚠️ Maximum price for ad-hoc manual item is ₹50,000.00.');
+        setNumpadValue('');
+        return;
+      }
       const genericProd: ResourceItem = {
         id: 'custom_' + Date.now(),
         sku: 'MISC',
@@ -311,6 +453,17 @@ export const LightningPOS: React.FC = () => {
   };
 
   const handleUpdateUnitPrice = (index: number, newPaise: number) => {
+    const role = getActiveUserRole();
+    const item = cartItems[index];
+
+    // CF-06: Require supervisor PIN if cashier attempts to drop price below base price
+    if (role === 'CASHIER' && item && newPaise < item.unit_price_paise) {
+      setSupervisorAction('OVERRIDE_PRICE');
+      setPendingPriceOverride({ index, newPaise });
+      setIsSupervisorPinOpen(true);
+      return;
+    }
+
     setCartItems((prev) => {
       const updated = [...prev];
       if (updated[index]) {
@@ -321,6 +474,20 @@ export const LightningPOS: React.FC = () => {
   };
 
   const handleUpdateDiscount = (index: number, newPaise: number) => {
+    const role = getActiveUserRole();
+    const item = cartItems[index];
+
+    // CF-06: Require supervisor PIN if cashier attempts discount > 10%
+    if (role === 'CASHIER' && item) {
+      const lineTotal = (item.quantity_milli / 1000) * item.unit_price_paise;
+      if (lineTotal > 0 && newPaise / lineTotal > 0.1) {
+        showToast('⚠️ Discretionary discounts over 10% require supervisor PIN.');
+        setSupervisorAction('HIGH_DISCOUNT');
+        setIsSupervisorPinOpen(true);
+        return;
+      }
+    }
+
     setCartItems((prev) => {
       const updated = [...prev];
       if (updated[index]) {
@@ -337,14 +504,50 @@ export const LightningPOS: React.FC = () => {
     }
   };
 
+  // CF-06 & CF-15: Clear cart with supervisor PIN check and modal confirmation
   const handleClearCart = useCallback(() => {
     if (cartItems.length === 0) return;
-    if (window.confirm('Are you sure you want to cancel and clear the current cart?')) {
+    const role = getActiveUserRole();
+    if (role === 'CASHIER') {
+      setSupervisorAction('CLEAR_CART');
+      setIsSupervisorPinOpen(true);
+    } else {
+      setIsConfirmClearOpen(true);
+    }
+  }, [cartItems.length]);
+
+  const handleExecuteClearCart = () => {
+    setCartItems([]);
+    setNumpadValue('');
+    try {
+      localStorage.removeItem('omnibill_active_cart');
+    } catch {}
+    setIsConfirmClearOpen(false);
+    showToast('Cart cleared');
+  };
+
+  const handleSupervisorAuthorized = () => {
+    if (supervisorAction === 'CLEAR_CART') {
       setCartItems([]);
       setNumpadValue('');
-      showToast('Cart cleared');
+      try {
+        localStorage.removeItem('omnibill_active_cart');
+      } catch {}
+      showToast('Supervisor authorized: Cart cleared');
+    } else if (supervisorAction === 'OVERRIDE_PRICE' && pendingPriceOverride) {
+      const { index, newPaise } = pendingPriceOverride;
+      setCartItems((prev) => {
+        const updated = [...prev];
+        if (updated[index]) {
+          updated[index] = { ...updated[index], unit_price_paise: newPaise };
+        }
+        return updated;
+      });
+      showToast(`Supervisor authorized: Unit price updated to ${formatPaise(newPaise)}`);
+      setPendingPriceOverride(null);
     }
-  }, [cartItems.length, showToast]);
+    setSupervisorAction(null);
+  };
 
   // Construct Completed Sale Data
   const buildCompletedSale = useCallback(
@@ -359,20 +562,35 @@ export const LightningPOS: React.FC = () => {
       const timeStr = now.toTimeString().split(' ')[0];
       const invNumber = posStorage.getNextInvoiceNumber();
 
+      // CF-16: Auto-resolve customer name from phone if customerName is empty
+      let resolvedCustomerName = customerName.trim();
+      const cleanPhone = customerPhone.trim();
+      if (!resolvedCustomerName && cleanPhone.length >= 10) {
+        try {
+          const entities = ErpStorageService.getEntities('CUSTOMER');
+          const matched = entities.find((c) => c.phone === cleanPhone);
+          if (matched) {
+            resolvedCustomerName = (matched as any).trade_name || matched.full_name || (matched as any).legal_name || '';
+          }
+        } catch {}
+      }
+
+      const currentBiz = posStorage.getBusinessProfile();
+
       return {
         transaction_id: 'tx_' + Date.now(),
         invoice_number: invNumber,
         invoice_date: businessDate,
         invoice_time: timeStr,
-        seller_state_code: business.state_code,
+        seller_state_code: currentBiz.state_code || business.state_code,
         place_of_supply_state_code: placeOfSupplyStateCode,
-        customer_name: customerName.trim() || undefined,
-        customer_phone: customerPhone.trim() || undefined,
+        customer_name: resolvedCustomerName || undefined,
+        customer_phone: cleanPhone || undefined,
         price_mode: priceMode,
         lines: taxComputation.lines,
         totals: taxComputation.totals,
         payment: defaultPayment,
-        business,
+        business: currentBiz,
       };
     },
     [
@@ -506,8 +724,19 @@ export const LightningPOS: React.FC = () => {
         return;
       }
 
-      // F2: Change Business Date
+      // F2: Toggle Instant Return / Exchange Mode
       if (e.key === 'F2') {
+        e.preventDefault();
+        setIsReturnMode((prev) => {
+          const next = !prev;
+          showToast(next ? '🔄 Return / Exchange Mode (F2) ACTIVE' : '🛒 Normal Billing Mode ACTIVE');
+          return next;
+        });
+        return;
+      }
+
+      // Alt+D: Change Business Date
+      if (e.altKey && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault();
         setIsDateModalOpen(true);
         return;
@@ -602,8 +831,8 @@ export const LightningPOS: React.FC = () => {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [
     cartItems.length,
     isHelpOpen,
@@ -621,7 +850,7 @@ export const LightningPOS: React.FC = () => {
   ]);
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
+    <div className="flex-1 flex flex-col h-full w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
       {/* Top Header with Brand, Business Date & Shortcuts */}
       <Header
         business={business}
@@ -637,6 +866,8 @@ export const LightningPOS: React.FC = () => {
         onHoldBill={handleHoldBill}
         onRecallBills={() => setIsHeldBillsOpen(true)}
         heldBillsCount={heldBills.length}
+        onOpenLiveSupport={() => setIsLiveSupportOpen(true)}
+        onOpenStoreProfile={() => setIsStoreProfileOpen(true)}
       />
 
       {/* Main Workspace Body */}
@@ -648,9 +879,9 @@ export const LightningPOS: React.FC = () => {
           onRefreshProducts={refreshProducts}
         />
       ) : (
-        <div className="flex-1 flex overflow-hidden p-3 gap-3">
+        <div className="flex-1 flex min-h-0 overflow-hidden p-2.5 sm:p-3 gap-2.5 sm:gap-3">
           {/* Left Column: Cart Table & Numpad Quick Entry */}
-          <div className="flex-1 flex flex-col space-y-3 overflow-hidden">
+          <div className="flex-1 flex flex-col space-y-2.5 sm:space-y-3 min-h-0 overflow-hidden">
             {/* Empty Catalog Helper Banner */}
             {products.length === 0 && (
               <div className="bg-blue-950/40 border border-blue-500/40 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-md shrink-0">
@@ -682,6 +913,24 @@ export const LightningPOS: React.FC = () => {
               </div>
             )}
 
+            {/* Return / Exchange Mode Indicator Banner */}
+            {isReturnMode && (
+              <div className="bg-rose-950/80 border border-rose-500/60 rounded-xl p-2.5 flex items-center justify-between text-xs text-rose-200 shadow-md shrink-0">
+                <div className="flex items-center space-x-2">
+                  <RotateCcw className="w-4 h-4 text-rose-400 animate-spin" />
+                  <span className="font-bold">RETURN / EXCHANGE MODE (F2) ACTIVE:</span>
+                  <span>Items scanned or entered in quick-bar will be credited as returns.</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsReturnMode(false)}
+                  className="px-2 py-0.5 bg-rose-900 border border-rose-700 text-rose-100 rounded text-[11px] font-semibold hover:bg-rose-800 transition"
+                >
+                  Exit Return Mode (F2)
+                </button>
+              </div>
+            )}
+
             {/* High-Performance Cart Table */}
             <CartTable
               items={taxComputation.lines}
@@ -691,6 +940,7 @@ export const LightningPOS: React.FC = () => {
               onUpdateUnitPricePaise={handleUpdateUnitPrice}
               onUpdateDiscountPaise={handleUpdateDiscount}
               onRemoveItem={handleRemoveItem}
+              onToggleReturn={handleToggleReturn}
               isIntraState={isIntraState}
             />
 
@@ -767,12 +1017,13 @@ export const LightningPOS: React.FC = () => {
         invoiceNumber="INV-NEXT"
         upiVpa={business.upi_vpa || 'omnimart@icici'}
         businessName={business.trade_name || business.legal_name}
+        customerPhone={customerPhone}
         onCompletePayment={handleCompletePayment}
       />
 
       <ThermalReceiptModal
         isOpen={isReceiptOpen}
-        onClose={() => setIsReceiptOpen(false)}
+        onClose={handleFinishSale}
         sale={lastCompletedSale}
         onConfirmComplete={handleFinishSale}
       />
@@ -804,6 +1055,65 @@ export const LightningPOS: React.FC = () => {
         heldBills={heldBills}
         onRecallBill={handleRecallBill}
         onDiscardBill={handleDiscardHeldBill}
+      />
+
+      <LiveSupportModal
+        isOpen={isLiveSupportOpen}
+        onClose={() => setIsLiveSupportOpen(false)}
+      />
+
+      {/* CF-02: Store Profile Configuration Modal */}
+      <StoreProfileModal
+        isOpen={isStoreProfileOpen}
+        onClose={() => {
+          setIsStoreProfileOpen(false);
+          setBusiness(posStorage.getBusinessProfile());
+          refreshProducts();
+        }}
+      />
+
+      {/* CF-06: Supervisor PIN Challenge Modal */}
+      <SupervisorPinModal
+        isOpen={isSupervisorPinOpen}
+        onClose={() => {
+          setIsSupervisorPinOpen(false);
+          setSupervisorAction(null);
+        }}
+        actionTitle={
+          supervisorAction === 'CLEAR_CART'
+            ? 'Supervisor Authorization: Void Cart'
+            : supervisorAction === 'OVERRIDE_PRICE'
+            ? 'Supervisor Authorization: Price Override'
+            : 'Supervisor Authorization: Discretionary Discount'
+        }
+        actionDescription={
+          supervisorAction === 'CLEAR_CART'
+            ? 'Cancel and Void Entire Cart'
+            : supervisorAction === 'OVERRIDE_PRICE'
+            ? 'Authorize Selling Below Cost / Base Rate'
+            : 'Authorize Discretionary Discount'
+        }
+        onAuthorized={handleSupervisorAuthorized}
+      />
+
+      {/* CF-15: Confirm Clear Cart Dialog */}
+      <ConfirmClearModal
+        isOpen={isConfirmClearOpen}
+        onClose={() => setIsConfirmClearOpen(false)}
+        onConfirmClear={handleExecuteClearCart}
+        itemCount={cartItems.length}
+      />
+
+      {/* CF-01: Unmapped Barcode Protection Modal */}
+      <UnmappedBarcodeModal
+        isOpen={isUnmappedBarcodeOpen}
+        onClose={() => setIsUnmappedBarcodeOpen(false)}
+        barcode={unmappedBarcodeValue}
+        onProductCreatedOrMapped={async (newProd: ResourceItem) => {
+          await refreshProducts();
+          addProductToCart(newProd, 1000);
+          showToast(`Created & Added: ${newProd.name}`);
+        }}
       />
     </div>
   );

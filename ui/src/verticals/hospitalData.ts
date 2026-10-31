@@ -14,6 +14,7 @@ import {
 } from './types';
 import { PurchaseExpenseVoucher } from '../components/common/PurchaseExpenseBillModal';
 import { formatPaise } from '../lib/tax';
+import { ErpStorageService } from '../lib/erpStorage';
 
 // ----------------------------------------------------------------------------
 // 1. SEEDED PATIENTS DIRECTORY (20 REALISTIC CLINICAL PROFILES)
@@ -786,70 +787,62 @@ export const DEFAULT_HOSPITAL_RECEIPT_SETTINGS: HospitalReceiptSettings = {
 };
 
 // ----------------------------------------------------------------------------
-// 7. SEEDED RECENT CLINICAL BILLING AUDIT LOGS
+// 7. SEEDED RECENT CLINICAL BILLING AUDIT LOGS (50 REALISTIC CLINICAL BILLS)
 // ----------------------------------------------------------------------------
-export const INITIAL_HOSPITAL_PAYMENTS: HospitalBillPaymentRecord[] = [
-  {
-    id: 'hosp_rec_001',
-    receipt_no: 'MED-2026-9011',
-    date: '2026-10-21',
-    patient_id: 'ent_pat_001',
-    patient_name: 'Rameshwar Nath Kulkarni',
-    uhid: 'UHID-2026-1001',
-    opd_no: 'OPD-8821',
-    doctor_name: 'Dr. Anita Joshi, MD (Medicine)',
-    department: 'General Medicine',
-    bill_type: 'OPD_CONSULT',
-    subtotal_paise: 60000,
-    discount_paise: 0,
-    tax_paise: 0,
-    net_paid_paise: 60000,
-    payment_mode: 'UPI',
-    transaction_ref: 'UPI-98218821',
-    staff_name: 'Sister Mary D’Souza',
-    remarks: 'Routine Diabetic quarterly review & BP monitoring',
-  },
-  {
-    id: 'hosp_rec_002',
-    receipt_no: 'MED-2026-9012',
-    date: '2026-10-21',
-    patient_id: 'ent_pat_003',
-    patient_name: 'Master Reyansh Gupta',
-    uhid: 'UHID-2026-1003',
-    opd_no: 'OPD-8829',
-    doctor_name: 'Dr. Sneha Patil, DCH (Pediatrics)',
-    department: 'Pediatrics',
-    bill_type: 'COMPOSITE',
-    subtotal_paise: 110000,
-    discount_paise: 10000,
-    tax_paise: 0,
-    net_paid_paise: 100000,
-    payment_mode: 'CARD',
-    transaction_ref: 'POS-HDFC-99128',
-    staff_name: 'Cashier Anand S',
-    remarks: 'OPD Consult + 2 In-Clinic Budecort Nebulization Sessions',
-  },
-  {
-    id: 'hosp_rec_003',
-    receipt_no: 'MED-2026-9013',
-    date: '2026-10-20',
-    patient_id: 'ent_pat_009',
-    patient_name: 'Vikramaditya Rathore',
-    uhid: 'UHID-2026-1009',
-    opd_no: 'IPD-4422',
-    doctor_name: 'Dr. Sanjay Kulkarni, MS (Gen Surg)',
-    department: 'General Surgery',
-    bill_type: 'IPD_DISCHARGE',
-    subtotal_paise: 3850000,
-    discount_paise: 350000,
-    tax_paise: 0,
-    net_paid_paise: 3500000,
-    payment_mode: 'BANK_TRANSFER',
-    transaction_ref: 'NEFT-ICICI-44129',
-    staff_name: 'Sr. Accountant Mehra',
-    remarks: 'Intermediate IPD settlement (Bed days + OT nursing + Medicines)',
-  },
-];
+const generateSeeded50HospitalPayments = (): HospitalBillPaymentRecord[] => {
+  const docs = [
+    { name: 'Dr. Anita Joshi, MD', dept: 'General Medicine', fee: 60000 },
+    { name: 'Dr. Vivek Malhotra, MS, MCh', dept: 'Cardiology', fee: 120000 },
+    { name: 'Dr. Sneha Patil, DCH', dept: 'Pediatrics', fee: 50000 },
+    { name: 'Dr. Rajesh Kulkarni, MS', dept: 'General Surgery', fee: 100000 },
+  ];
+  const billTypes: ('OPD_CONSULT' | 'COMPOSITE' | 'IPD_DISCHARGE' | 'PHARMACY_DISPENSE')[] = [
+    'OPD_CONSULT',
+    'COMPOSITE',
+    'IPD_DISCHARGE',
+    'PHARMACY_DISPENSE',
+  ];
+  const paymentModes: PaymentMode[] = ['UPI', 'CASH', 'CARD', 'BANK_TRANSFER'];
+  const list: HospitalBillPaymentRecord[] = [];
+  const today = new Date().toISOString().split('T')[0];
+
+  for (let h = 1; h <= 50; h++) {
+    const billNo = `MED-2026-${String(9000 + h)}`;
+    const doc = docs[(h - 1) % docs.length];
+    const bType = billTypes[(h - 1) % billTypes.length];
+    const mode = paymentModes[(h - 1) % paymentModes.length];
+    const consult = doc.fee;
+    const pharma = ((h % 3) + 1) * 8500;
+    const bed = (h % 3 === 0) ? 350000 : 0;
+    const subtotal = consult + pharma + bed;
+    const disc = (h % 5 === 0) ? 10000 : 0;
+    const netPaid = subtotal - disc;
+
+    list.push({
+      id: `hosp_rec_seed_${h}`,
+      receipt_no: billNo,
+      date: today,
+      patient_id: `ent_pat_${(h % 15) + 1}`,
+      patient_name: `Patient #${h} (Age: ${(h * 7) % 60 + 18})`,
+      uhid: `UHID-2026-${String(1000 + h)}`,
+      opd_no: `OPD-${String(8800 + h)}`,
+      doctor_name: doc.name,
+      department: doc.dept,
+      bill_type: bType,
+      subtotal_paise: subtotal,
+      discount_paise: disc,
+      tax_paise: 0,
+      net_paid_paise: netPaid,
+      payment_mode: mode,
+      transaction_ref: mode === 'UPI' ? `UPI-${98218000 + h}` : `POS-${100000 + h}`,
+      staff_name: 'Clinical Billing Desk',
+      remarks: bType === 'IPD_DISCHARGE' ? 'IPD Room Stay & Clinical Discharge' : 'Clinical Consultation & Medications',
+    });
+  }
+  return list;
+};
+
+export const INITIAL_HOSPITAL_PAYMENTS: HospitalBillPaymentRecord[] = generateSeeded50HospitalPayments();
 
 // ----------------------------------------------------------------------------
 // 7.5 SEEDED HOSPITAL PHARMACY & MEDICAL SUPPLIES STOCK (15 CLINICAL CONSUMABLES)
@@ -1211,7 +1204,10 @@ export class HospitalDataService {
   static getPayments(): HospitalBillPaymentRecord[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length >= 50) return parsed;
+      }
     } catch (e) {
       console.warn('Failed to parse hospital payments:', e);
     }
@@ -1331,6 +1327,32 @@ export class HospitalDataService {
     });
 
     this.saveMedicalStock(stock);
+
+    // Also inward to ErpStorageService (Item Master & Inventory Lots)
+    try {
+      ErpStorageService.inwardStock(
+        purchase.lines.map((l) => {
+          const item = stock.find((s) => s.id === l.itemId);
+          return {
+            resource_id: l.itemId,
+            sku: item?.item_code,
+            name: item?.name,
+            quantity_milli: l.quantity * 1000,
+            cost_price_paise: l.costPricePaise,
+          };
+        })
+      );
+    } catch (e) {
+      console.warn('Failed to inward hospital stock to ErpStorageService:', e);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('omnibill_catalog_sync', {
+          detail: { vertical: 'HOSPITAL' },
+        })
+      );
+    }
 
     const settings = this.getReceiptSettings();
     const voucher: PurchaseExpenseVoucher = {

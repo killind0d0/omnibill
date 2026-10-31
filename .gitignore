@@ -10,3 +10,14 @@ control-plane/web/node_modules
 *.key
 *.pem
 *.env
+*.bin
+*.secret
+*.recovery
+*credentials*
+control-plane/keys/
+control-plane/*.db*
+*.db*
+*.sqlite*
+*.log
+scripts/screenshots/
+*.png

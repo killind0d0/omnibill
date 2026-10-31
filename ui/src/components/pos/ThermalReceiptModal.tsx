@@ -4,6 +4,7 @@ import { Modal } from '../common/Modal';
 import { CompletedSale } from '../../types/pos';
 import { formatPaise, formatMilliQty } from '../../lib/tax';
 import { buildUpiString, generateQrDataUrl } from '../../lib/upi';
+import { paiseToWords } from '../../lib/numbersToWords';
 
 interface ThermalReceiptModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
 }) => {
   const [paperWidth, setPaperWidth] = useState<'58mm' | '80mm'>('80mm');
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [waNotice, setWaNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sale) return;
@@ -41,7 +43,6 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
 
   const isIntraState = sale.seller_state_code === sale.place_of_supply_state_code;
   const is58 = paperWidth === '58mm';
-  const [waNotice, setWaNotice] = useState<string | null>(null);
 
   const handlePrint = () => {
     window.print();
@@ -56,7 +57,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
     const lineDetails = sale.lines
       .map(
         (l) =>
-          `• *${l.name}*\n   ${formatMilliQty(l.quantity_milli)} x ₹${(l.unit_price_paise / 100).toFixed(2)} = *₹${(l.line_total_paise / 100).toFixed(2)}*`
+          `• *${l.name}*\n   ${formatMilliQty(l.quantity_milli)} x ${formatPaise(l.unit_price_paise)} = *${formatPaise(l.line_total_paise)}*`
       )
       .join('\n');
 
@@ -72,10 +73,11 @@ ${sale.customer_name ? `👤 *Customer:* ${sale.customer_name}\n` : ''}---------
 *ITEMS:*
 ${lineDetails}
 ----------------------------------------
-Subtotal: ₹${(sale.totals.subtotal_paise / 100).toFixed(2)}
-${sale.totals.discount_paise > 0 ? `Discount: -₹${(sale.totals.discount_paise / 100).toFixed(2)}\n` : ''}Taxable Value: ₹${(sale.totals.taxable_paise / 100).toFixed(2)}
-CGST: ₹${(sale.totals.cgst_paise / 100).toFixed(2)} | SGST: ₹${(sale.totals.sgst_paise / 100).toFixed(2)}
-${sale.totals.round_off_paise !== 0 ? `Round Off: ₹${(sale.totals.round_off_paise / 100).toFixed(2)}\n` : ''}*TOTAL AMOUNT: ₹${(sale.totals.total_amount_paise / 100).toFixed(2)}*
+Subtotal: ${formatPaise(sale.totals.subtotal_paise)}
+${sale.totals.discount_paise > 0 ? `Discount: -${formatPaise(sale.totals.discount_paise)}\n` : ''}Taxable Value: ${formatPaise(sale.totals.taxable_paise)}
+CGST: ${formatPaise(sale.totals.cgst_paise)} | SGST: ${formatPaise(sale.totals.sgst_paise)}
+${sale.totals.round_off_paise !== 0 ? `Round Off: ${formatPaise(sale.totals.round_off_paise)}\n` : ''}*TOTAL AMOUNT: ${formatPaise(sale.totals.total_amount_paise)}*
+_(${paiseToWords(sale.totals.total_amount_paise)})_
 ----------------------------------------
 💳 Payment Mode: *${sale.payment?.mode || 'CASH'}*
 Thank you for shopping with us! 🙏`;
@@ -105,52 +107,51 @@ Thank you for shopping with us! 🙏`;
       <div className="flex flex-col space-y-4">
         {/* Controls Bar: 58mm / 80mm Switcher, WhatsApp & Print Button */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800 gap-2 select-none">
-          <div className="flex items-center space-x-1.5">
-            <span className="text-xs text-slate-400 font-medium px-1">Width:</span>
-            <button
-              type="button"
-              onClick={() => setPaperWidth('58mm')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                paperWidth === '58mm'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              58mm
-            </button>
-            <button
-              type="button"
-              onClick={() => setPaperWidth('80mm')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                paperWidth === '80mm'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              80mm (Standard)
-            </button>
-          </div>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  type="button"
+                  onClick={() => setPaperWidth('58mm')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all focus-ring ${
+                    paperWidth === '58mm'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  58mm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaperWidth('80mm')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all focus-ring ${
+                    paperWidth === '80mm'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  80mm (Standard)
+                </button>
+              </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={handleSendWhatsApp}
-              className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow transition-all cursor-pointer"
-              title="Send Receipt via WhatsApp"
-            >
-              <MessageCircle className="w-3.5 h-3.5 text-emerald-300" />
-              <span>WhatsApp Bill</span>
-            </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleSendWhatsApp}
+                  className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow transition-all cursor-pointer focus-ring"
+                  title="Send Receipt via WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>WhatsApp Bill</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-md shadow-blue-600/20 transition-all cursor-pointer"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Print</span>
-            </button>
-          </div>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-md shadow-blue-600/20 transition-all cursor-pointer focus-ring"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print</span>
+                </button>
+              </div>
         </div>
 
         {/* WhatsApp Notice Banner */}
@@ -219,7 +220,7 @@ Thank you for shopping with us! 🙏`;
             <div className="py-1 space-y-1.5">
               {sale.lines.map((item, idx) => (
                 <div key={idx} className="space-y-0.5">
-                  <div className="font-semibold truncate">{item.name}</div>
+                  <div className="font-semibold break-words whitespace-normal leading-tight">{item.name}</div>
                   <div className="flex justify-between text-[10px] text-slate-700">
                     <span className="w-1/2">
                       HSN:{item.hsn || '-'} ({((item.tax_rate_bps) / 100).toFixed(0)}%)
@@ -288,6 +289,11 @@ Thank you for shopping with us! 🙏`;
               <div className="border-y-2 border-black py-1 my-1 flex justify-between font-bold text-sm">
                 <span>NET PAYABLE:</span>
                 <span>{formatPaise(sale.totals.total_amount_paise)}</span>
+              </div>
+
+              {/* GST Mandate: Amount in Words */}
+              <div className="text-[10px] text-slate-800 italic pt-0.5 leading-snug">
+                <span className="font-semibold not-italic">Amount in Words:</span> {paiseToWords(sale.totals.total_amount_paise)}
               </div>
             </div>
 

@@ -186,23 +186,28 @@ export function computeSaleTotals(
       isIntraState
     );
 
+    const isReturn = !!line.is_return;
+    const sign = isReturn ? -1n : 1n;
+    const numSign = isReturn ? -1 : 1;
+
     const lineSubtotal = BigInt(comp.taxable_paise) + BigInt(comp.discount_paise);
-    sumSubtotal += lineSubtotal;
-    sumDiscount += BigInt(comp.discount_paise);
-    sumTaxable += BigInt(comp.taxable_paise);
-    sumCgst += BigInt(comp.cgst_paise);
-    sumSgst += BigInt(comp.sgst_paise);
-    sumIgst += BigInt(comp.igst_paise);
+    sumSubtotal += lineSubtotal * sign;
+    sumDiscount += BigInt(comp.discount_paise) * sign;
+    sumTaxable += BigInt(comp.taxable_paise) * sign;
+    sumCgst += BigInt(comp.cgst_paise) * sign;
+    sumSgst += BigInt(comp.sgst_paise) * sign;
+    sumIgst += BigInt(comp.igst_paise) * sign;
 
     return {
       ...line,
-      gross_paise: comp.gross_paise,
-      discount_paise: comp.discount_paise,
-      taxable_paise: comp.taxable_paise,
-      cgst_paise: comp.cgst_paise,
-      sgst_paise: comp.sgst_paise,
-      igst_paise: comp.igst_paise,
-      line_total_paise: comp.line_total_paise,
+      is_return: isReturn,
+      gross_paise: comp.gross_paise * numSign,
+      discount_paise: comp.discount_paise * numSign,
+      taxable_paise: comp.taxable_paise * numSign,
+      cgst_paise: comp.cgst_paise * numSign,
+      sgst_paise: comp.sgst_paise * numSign,
+      igst_paise: comp.igst_paise * numSign,
+      line_total_paise: comp.line_total_paise * numSign,
     };
   });
 

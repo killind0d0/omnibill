@@ -143,7 +143,7 @@ rustup component add clippy rustfmt
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/killindodo/omnibill.git
+git clone https://github.com/killind0d0/omnibill.git
 cd omnibill
 ```
 

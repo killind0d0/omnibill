@@ -17,6 +17,7 @@ export interface ResourceLot {
 export interface ResourceItem {
   id: string;
   sku: string;
+  barcode?: string;
   name: string;
   hsn_sac: string;
   tax_rate_bps: number; // 0, 500, 1200, 1800, 2800
@@ -163,3 +164,159 @@ export interface RecordPaymentPayload {
   narration: string;
   allocated_voucher_no?: string;
 }
+
+export interface PeriodLockState {
+  lock_date: string | null; // YYYY-MM-DD
+  locked_by: string;
+  locked_at: string;
+  reason: string;
+  audit_history?: Array<{
+    action: 'LOCK' | 'UNLOCK';
+    lock_date: string | null;
+    user: string;
+    timestamp: string;
+    reason: string;
+  }>;
+}
+
+export interface Gstr3BTable31 {
+  taxable_paise: number;
+  igst_paise: number;
+  cgst_paise: number;
+  sgst_paise: number;
+  cess_paise: number;
+}
+
+export interface Gstr3BReport {
+  period: string; // YYYY-MM
+  outward_taxable: Gstr3BTable31; // 3.1(a)
+  outward_zero_rated: Gstr3BTable31; // 3.1(b)
+  outward_nil_exempt: Gstr3BTable31; // 3.1(c)
+  inward_rcm: Gstr3BTable31; // 3.1(d)
+  non_gst_outward: Gstr3BTable31; // 3.1(e)
+  itc_available: {
+    import_goods: Gstr3BTable31;
+    import_services: Gstr3BTable31;
+    inward_rcm: Gstr3BTable31;
+    inward_isd: Gstr3BTable31;
+    all_other_itc: Gstr3BTable31;
+  };
+  itc_reversed: {
+    rule_42_43: Gstr3BTable31;
+    others: Gstr3BTable31;
+  };
+  net_itc_available: Gstr3BTable31;
+  gl_reconciliation: {
+    gl_output_cgst_paise: number;
+    gl_output_sgst_paise: number;
+    gl_output_igst_paise: number;
+    gstr3b_output_cgst_paise: number;
+    gstr3b_output_sgst_paise: number;
+    gstr3b_output_igst_paise: number;
+    discrepancy_output_paise: number;
+    gl_itc_paise: number;
+    gstr3b_itc_paise: number;
+    discrepancy_itc_paise: number;
+    is_tied_to_gl: boolean;
+  };
+}
+
+export interface BankVoucherItem {
+  id: string;
+  voucher_number: string;
+  date: string;
+  party_name: string;
+  type: 'PAYMENT' | 'RECEIPT' | 'CONTRA';
+  amount_paise: number;
+  narration: string;
+  is_cleared: boolean;
+  cleared_date?: string;
+  reference_no?: string;
+}
+
+export interface BrsSummary {
+  bank_account_id: string;
+  bank_account_name: string;
+  statement_date: string;
+  balance_per_books_paise: number;
+  unpresented_cheques_paise: number; // Add: Payments issued not yet cleared
+  uncleared_deposits_paise: number; // Less: Receipts/Deposits not yet cleared
+  balance_per_bank_statement_paise: number;
+  reconciled_count: number;
+  pending_count: number;
+}
+
+export interface FinancialStatements {
+  trading: {
+    gross_sales_paise: number;
+    sales_returns_paise: number;
+    net_sales_revenue_paise: number;
+    cogs_paise: number;
+    gross_profit_paise: number;
+    gross_margin_bps: number;
+  };
+  pnl: {
+    gross_profit_paise: number;
+    operating_expenses_paise: number;
+    other_income_paise: number;
+    net_profit_paise: number;
+    net_margin_bps: number;
+  };
+  balance_sheet: {
+    current_assets_paise: number;
+    fixed_assets_paise: number;
+    total_assets_paise: number;
+    current_liabilities_paise: number;
+    total_liabilities_paise: number;
+    capital_paise: number;
+    retained_earnings_paise: number;
+    current_net_profit_paise: number;
+    total_equity_paise: number;
+    total_liabilities_and_equity_paise: number;
+    is_balanced: boolean;
+    difference_paise: number;
+  };
+}
+
+export interface StocktakeItem {
+  id: string;
+  sku: string;
+  barcode: string;
+  name: string;
+  category: string;
+  unit: string;
+  book_stock_milli: number;
+  physical_stock_milli: number;
+  unit_cost_paise: number;
+  variance_milli: number;
+  variance_value_paise: number;
+  status: 'MATCHED' | 'SHORTAGE' | 'SURPLUS';
+}
+
+export interface StocktakeSummary {
+  freeze_timestamp: string;
+  total_skus: number;
+  matched_skus: number;
+  variance_skus: number;
+  total_shortage_paise: number;
+  total_surplus_paise: number;
+  net_variance_paise: number;
+}
+
+export interface CustomerLoyalty {
+  phone: string;
+  name?: string;
+  points_balance: number;
+  tier: 'SILVER' | 'GOLD' | 'PLATINUM';
+  total_spent_paise: number;
+  updated_at: string;
+}
+
+export interface AuditChainStatus {
+  is_valid: boolean;
+  total_records: number;
+  last_hash: string;
+  broken_index?: number;
+  failure_reason?: string;
+}
+

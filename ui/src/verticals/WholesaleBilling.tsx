@@ -66,6 +66,7 @@ import {
   generateB2BInvoiceWhatsAppLink,
 } from './wholesaleData';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { paiseToWords } from '../lib/numbersToWords';
 import { posSound } from '../lib/sound';
 
 export type WholesaleTab = 'INVOICING' | 'CUSTOMERS' | 'STOCK_INWARD' | 'PRICING_TIERS' | 'EXPENSES' | 'REPORTS' | 'INVOICE_SETTINGS';
@@ -206,6 +207,13 @@ export const WholesaleBilling: React.FC = () => {
         addResourceToInvoice(res[1], 10);
       }
     });
+
+    const handleSync = () => {
+      setWholesaleStock(WholesaleDataService.getWholesaleStock());
+      VerticalIPCBridge.getResources('WHOLESALE').then(setCatalog);
+    };
+    window.addEventListener('omnibill_catalog_sync', handleSync);
+    return () => window.removeEventListener('omnibill_catalog_sync', handleSync);
   }, []);
 
   const selectedCustomer = useMemo(() => {
@@ -401,27 +409,47 @@ export const WholesaleBilling: React.FC = () => {
     computedDocument.totals.total_amount_paise - calculatedDiscountPaise
   );
 
-  // Credit Limit Verification
-  const creditLimitPaise = selectedCustomer?.credit_limit_paise || 0;
-  const currentBalancePaise = selectedCustomer?.current_balance_paise || 0;
+  // Manager / Supervisor Override state for B2B Credit Limit & Aging Breaches
+  const [managerOverride, setManagerOverride] = useState<boolean>(false);
+  const [managerPin, setManagerPin] = useState<string>('');
+
+  // Live B2B Credit Summary with Overdue Aging Buckets
+  const creditSummary = useMemo(() => {
+    if (!selectedCustomer) return null;
+    return WholesaleDataService.getCustomerCreditSummary(selectedCustomer.id);
+  }, [selectedCustomer, invoices]);
+
+  const creditLimitPaise = creditSummary?.credit_limit_paise ?? (selectedCustomer?.credit_limit_paise || 0);
+  const currentBalancePaise = creditSummary?.total_outstanding_paise ?? (selectedCustomer?.current_balance_paise || 0);
   const availableCreditPaise = Math.max(0, creditLimitPaise - currentBalancePaise);
+  
+  // Simulated credit impact including the active cart total
+  const simulatedTotalBalancePaise = currentBalancePaise + totalInvoiceAmountPaise;
   const isCreditExceeded =
     paymentMode === 'BANK_TRANSFER' &&
-    currentBalancePaise + totalInvoiceAmountPaise > creditLimitPaise;
+    simulatedTotalBalancePaise > creditLimitPaise;
   const excessCreditAmountPaise = isCreditExceeded
-    ? currentBalancePaise + totalInvoiceAmountPaise - creditLimitPaise
+    ? simulatedTotalBalancePaise - creditLimitPaise
     : 0;
   const creditUsagePercent =
     creditLimitPaise > 0
-      ? Math.min(100, Math.round(((currentBalancePaise + totalInvoiceAmountPaise) / creditLimitPaise) * 100))
+      ? Math.min(100, Math.round((simulatedTotalBalancePaise / creditLimitPaise) * 100))
       : 0;
+
+  // Aging breach check (>60 days critical overdue)
+  const hasCriticalOverdue = creditSummary ? creditSummary.has_critical_overdue : false;
+  const criticalOverduePaise = creditSummary?.critical_overdue_60_plus_paise || 0;
+
+  // Enforce Credit Guard block
+  const isCreditBlocked = paymentMode === 'BANK_TRANSFER' && (isCreditExceeded || hasCriticalOverdue);
+  const canPostInvoice = cart.length > 0 && !!selectedCustomer && (!isCreditBlocked || managerOverride);
 
   // Statutory e-Way Bill check (Threshold >= ₹50,000)
   const isEwayBillRequired = totalInvoiceAmountPaise >= 5000000;
 
   // Post B2B Invoice
   const handlePostInvoice = async () => {
-    if (cart.length === 0 || !selectedCustomer) return;
+    if (!canPostInvoice || !selectedCustomer) return;
     posSound.playSuccess();
 
     const payment: PaymentDetails = {
@@ -430,6 +458,10 @@ export const WholesaleBilling: React.FC = () => {
       change_due_paise: 0,
       reference_number: bankReference || `B2B-TXN-${Date.now().toString().slice(-6)}`,
     };
+
+    const overrideNote = isCreditBlocked && managerOverride
+      ? ` • [SUPERVISOR OVERRIDE AUTHORIZED: ${managerPin || 'Manager Auth'}]`
+      : '';
 
     const receipt = await VerticalIPCBridge.postTransaction({
       verticalMode: 'WHOLESALE',
@@ -440,12 +472,13 @@ export const WholesaleBilling: React.FC = () => {
         ...selectedCustomer,
         eway_bill: isEwayBillRequired ? ewayDetails : undefined,
         trade_discount_reason: tradeDiscountMode !== 'NONE' ? tradeDiscountReason : undefined,
+        manager_override: isCreditBlocked && managerOverride ? (managerPin || 'Authorized') : undefined,
       },
       lines: cart,
       totals: computedDocument.totals,
       payment,
       ewayBill: isEwayBillRequired ? ewayDetails : undefined,
-      notes: `Tax Invoice • B2B Supply • Buyer GSTIN: ${selectedCustomer.gstin} • State: ${selectedCustomer.state_code}`,
+      notes: `Tax Invoice • B2B Supply • Buyer GSTIN: ${selectedCustomer.gstin} • State: ${selectedCustomer.state_code}${overrideNote}`,
     });
 
     // Save into B2B Invoices Audit Log
@@ -480,6 +513,9 @@ export const WholesaleBilling: React.FC = () => {
 
     setLastReceipt(receipt);
     setShowInvoiceModal(true);
+    setCart([]);
+    setManagerOverride(false);
+    setManagerPin('');
     showToast(`Tax Invoice #${receipt.invoice_number} successfully generated!`);
   };
 
@@ -679,7 +715,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 1: B2B INVOICING & CHECKOUT
       --------------------------------------------------------------------- */}
       {activeTab === 'INVOICING' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* TWO-WAY SMART B2B PARTY IDENTIFICATION */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -776,17 +812,71 @@ export const WholesaleBilling: React.FC = () => {
                       >
                         {isInterState ? '🌐 INTER-STATE (IGST)' : '📍 INTRA-STATE (CGST + SGST)'}
                       </span>
+                      {/* Live Credit Risk Status Pill */}
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
+                          isCreditBlocked
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/50 animate-pulse'
+                            : isCreditExceeded || (creditSummary?.overdue_31_60_paise ?? 0) > 0 || creditUsagePercent > 80
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                        }`}
+                      >
+                        {isCreditBlocked ? (
+                          <>
+                            <ShieldAlert className="w-3 h-3 text-rose-400" />
+                            <span>⛔ CREDIT BLOCKED</span>
+                          </>
+                        ) : isCreditExceeded || (creditSummary?.overdue_31_60_paise ?? 0) > 0 || creditUsagePercent > 80 ? (
+                          <>
+                            <AlertTriangle className="w-3 h-3 text-amber-400" />
+                            <span>⚠️ CREDIT WARNING</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                            <span>✓ CREDIT APPROVED</span>
+                          </>
+                        )}
+                      </span>
                     </div>
-                    <p className="text-[11px] text-slate-400">
+                    <p className="text-[11px] text-slate-400 mt-0.5">
                       GSTIN: <span className="font-mono text-slate-300 font-bold">{selectedCustomer.gstin}</span> • State {selectedCustomer.state_code} • Terms: {selectedCustomer.payment_terms_days || 30} Days
                     </p>
                   </div>
                 </div>
 
+                {/* OVERDUE AGING BUCKETS CARD */}
+                {creditSummary && (
+                  <div className="border-l border-slate-800 pl-4 flex items-center space-x-3 text-[11px]">
+                    <div className="text-slate-400 font-semibold">Overdue Aging:</div>
+                    <div className="flex items-center space-x-1.5">
+                      <div className="px-2 py-1 bg-slate-900 border border-slate-700/80 rounded-lg text-center">
+                        <span className="block text-[9px] text-slate-400 uppercase font-mono">0-30 Days</span>
+                        <span className="font-mono font-bold text-emerald-400">
+                          {formatPaise(creditSummary.current_0_30_paise)}
+                        </span>
+                      </div>
+                      <div className="px-2 py-1 bg-slate-900 border border-slate-700/80 rounded-lg text-center">
+                        <span className="block text-[9px] text-slate-400 uppercase font-mono">31-60 Days</span>
+                        <span className={`font-mono font-bold ${creditSummary.overdue_31_60_paise > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+                          {formatPaise(creditSummary.overdue_31_60_paise)}
+                        </span>
+                      </div>
+                      <div className="px-2 py-1 bg-slate-900 border border-slate-700/80 rounded-lg text-center">
+                        <span className="block text-[9px] text-slate-400 uppercase font-mono">60+ Days (Crit)</span>
+                        <span className={`font-mono font-bold ${creditSummary.critical_overdue_60_plus_paise > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                          {formatPaise(creditSummary.critical_overdue_60_plus_paise)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* CREDIT UTILIZATION PROGRESS BAR */}
-                <div className="border-l border-slate-800 pl-4 w-64">
+                <div className="border-l border-slate-800 pl-4 w-60">
                   <div className="flex justify-between text-[11px] mb-1">
-                    <span className="text-slate-400 font-bold">Credit Limit Usage:</span>
+                    <span className="text-slate-400 font-bold">Credit Utilization:</span>
                     <span
                       className={`font-mono font-bold ${
                         isCreditExceeded
@@ -812,8 +902,8 @@ export const WholesaleBilling: React.FC = () => {
                     />
                   </div>
                   <div className="flex justify-between text-[10px] text-slate-500 mt-1">
-                    <span>Avail: ₹{formatPaise(availableCreditPaise)}</span>
-                    <span>Limit: ₹{formatPaise(creditLimitPaise)}</span>
+                    <span>Avail: {formatPaise(availableCreditPaise)}</span>
+                    <span>Limit: {formatPaise(creditLimitPaise)}</span>
                   </div>
                 </div>
 
@@ -1144,30 +1234,30 @@ export const WholesaleBilling: React.FC = () => {
                 <div className="space-y-1.5 text-xs border-b border-slate-800 pb-3">
                   <div className="flex justify-between text-slate-400">
                     <span>Taxable Value (Gross):</span>
-                    <span className="font-mono text-white">₹{formatPaise(rawSubtotalPaise)}</span>
+                    <span className="font-mono text-white">{formatPaise(rawSubtotalPaise)}</span>
                   </div>
 
                   {calculatedDiscountPaise > 0 && (
                     <div className="flex justify-between text-blue-400 font-semibold">
                       <span>Trade Discount ({tradeDiscountReason}):</span>
-                      <span className="font-mono">-₹{formatPaise(calculatedDiscountPaise)}</span>
+                      <span className="font-mono">-{formatPaise(calculatedDiscountPaise)}</span>
                     </div>
                   )}
 
                   {isInterState ? (
                     <div className="flex justify-between text-purple-400 font-semibold">
                       <span>Integrated GST (IGST):</span>
-                      <span className="font-mono">+₹{formatPaise(computedDocument.totals.igst_paise)}</span>
+                      <span className="font-mono">+{formatPaise(computedDocument.totals.igst_paise)}</span>
                     </div>
                   ) : (
                     <>
                       <div className="flex justify-between text-emerald-400 font-semibold">
                         <span>Central GST (CGST):</span>
-                        <span className="font-mono">+₹{formatPaise(computedDocument.totals.cgst_paise)}</span>
+                        <span className="font-mono">+{formatPaise(computedDocument.totals.cgst_paise)}</span>
                       </div>
                       <div className="flex justify-between text-emerald-400 font-semibold">
                         <span>State GST (SGST):</span>
-                        <span className="font-mono">+₹{formatPaise(computedDocument.totals.sgst_paise)}</span>
+                        <span className="font-mono">+{formatPaise(computedDocument.totals.sgst_paise)}</span>
                       </div>
                     </>
                   )}
@@ -1177,7 +1267,7 @@ export const WholesaleBilling: React.FC = () => {
                       <span>Invoice Round-Off:</span>
                       <span className="font-mono">
                         {computedDocument.totals.round_off_paise > 0 ? '+' : ''}
-                        ₹{formatPaise(computedDocument.totals.round_off_paise)}
+                        {formatPaise(computedDocument.totals.round_off_paise)}
                       </span>
                     </div>
                   )}
@@ -1185,7 +1275,7 @@ export const WholesaleBilling: React.FC = () => {
                   <div className="flex justify-between items-center text-base font-extrabold text-white pt-2 border-t border-slate-800">
                     <span>Total Tax Invoice Value:</span>
                     <span className="text-xl font-mono text-blue-400">
-                      ₹{formatPaise(totalInvoiceAmountPaise)}
+                      {formatPaise(totalInvoiceAmountPaise)}
                     </span>
                   </div>
                 </div>
@@ -1221,24 +1311,84 @@ export const WholesaleBilling: React.FC = () => {
                   </div>
                 </div>
 
-                {/* CREDIT WARNING IF EXCEEDED */}
-                {isCreditExceeded && (
-                  <div className="bg-rose-950/60 border border-rose-600/50 rounded-xl p-2.5 text-xs text-rose-300 flex items-center space-x-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                    <span>
-                      <b>Credit Limit Breach:</b> This invoice exceeds buyer credit by ₹{formatPaise(excessCreditAmountPaise)}. Requires Management Approval!
-                    </span>
+                {/* B2B CREDIT GUARD RESTRICTION BANNER & SUPERVISOR OVERRIDE */}
+                {isCreditBlocked && (
+                  <div className="bg-rose-950/70 border border-rose-500/60 rounded-xl p-3.5 text-xs text-rose-200 space-y-2.5 shadow-md animate-fadeIn">
+                    <div className="flex items-start space-x-2">
+                      <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-sm text-rose-100 flex items-center gap-1.5">
+                          <ShieldAlert className="w-4 h-4 text-rose-400" />
+                          <span>⛔ B2B Credit Risk Guard: Invoice Blocked</span>
+                        </div>
+                        <div className="text-[11px] text-rose-300 mt-1 space-y-0.5">
+                          {isCreditExceeded && (
+                            <div>
+                              • Exceeds approved credit limit by <b>{formatPaise(excessCreditAmountPaise)}</b> (Total: {formatPaise(simulatedTotalBalancePaise)} / Limit: {formatPaise(creditLimitPaise)})
+                            </div>
+                          )}
+                          {hasCriticalOverdue && (
+                            <div>
+                              • Buyer has invoices overdue &gt; 60 days: <b>{formatPaise(criticalOverduePaise)}</b>
+                            </div>
+                          )}
+                          <div className="text-rose-400 italic font-medium">
+                            Dispatches are locked by enterprise credit policy until past dues are cleared or supervisor override is authorized.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Interactive Supervisor Override Controls */}
+                    <div className="bg-rose-900/40 p-2.5 rounded-lg border border-rose-700/50 space-y-2">
+                      <label className="flex items-center space-x-2 text-xs font-semibold text-rose-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={managerOverride}
+                          onChange={(e) => setManagerOverride(e.target.checked)}
+                          className="w-4 h-4 rounded border-rose-500 text-rose-600 focus:ring-rose-500"
+                        />
+                        <span>Authorize Supervisor Credit Override (Management Approval)</span>
+                      </label>
+
+                      {managerOverride && (
+                        <div className="flex items-center space-x-2 pt-1 animate-fadeIn">
+                          <input
+                            type="text"
+                            placeholder="Enter Supervisor Name or Auth PIN (e.g. MGR-RAJESH-902)"
+                            value={managerPin}
+                            onChange={(e) => setManagerPin(e.target.value)}
+                            className="flex-1 bg-slate-950 border border-rose-500/70 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-rose-300/50 font-mono focus:outline-none"
+                          />
+                          <span className="text-[10px] text-amber-300 font-semibold shrink-0">
+                            Override Authorized ✓
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
                 {/* POST BILL BUTTON */}
                 <button
-                  disabled={cart.length === 0}
+                  disabled={!canPostInvoice}
                   onClick={handlePostInvoice}
-                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold flex items-center justify-center space-x-2 transition cursor-pointer shadow-lg shadow-blue-600/30"
+                  className={`w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center space-x-2 transition cursor-pointer shadow-lg ${
+                    isCreditBlocked && !managerOverride
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-60 border border-slate-700 shadow-none'
+                      : isCreditBlocked && managerOverride
+                      ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/30'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/30'
+                  }`}
                 >
                   <FileText className="w-4 h-4" />
-                  <span>Generate B2B Tax Invoice & Commit Outward Supply (₹{formatPaise(totalInvoiceAmountPaise)})</span>
+                  <span>
+                    {isCreditBlocked && !managerOverride
+                      ? `🔒 Post Blocked — Credit Limit / Aging Breach (Supervisor Override Required)`
+                      : isCreditBlocked && managerOverride
+                      ? `⚠️ Post Invoice with Supervisor Authorization (${formatPaise(totalInvoiceAmountPaise)})`
+                      : `Generate B2B Tax Invoice & Commit Outward Supply (${formatPaise(totalInvoiceAmountPaise)})`}
+                  </span>
                 </button>
               </div>
             </div>
@@ -1250,7 +1400,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 2: B2B PARTIES & CREDIT MANAGEMENT
       --------------------------------------------------------------------- */}
       {activeTab === 'CUSTOMERS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div>
@@ -1282,7 +1432,7 @@ export const WholesaleBilling: React.FC = () => {
               </div>
             </div>
 
-            {/* CUSTOMERS TABLE */}
+            {/* CUSTOMERS TABLE WITH AGING BUCKETS & RISK STATUS */}
             <div className="overflow-x-auto border border-slate-800 rounded-xl">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-950 text-slate-400 font-bold border-b border-slate-800">
@@ -1291,18 +1441,17 @@ export const WholesaleBilling: React.FC = () => {
                     <th className="p-3">Buyer Company Name</th>
                     <th className="p-3">Location & State</th>
                     <th className="p-3 text-right">Credit Limit</th>
-                    <th className="p-3 text-right">Current Ledger Balance</th>
-                    <th className="p-3 text-right">Available Credit</th>
+                    <th className="p-3 text-right">Outstanding Dues</th>
+                    <th className="p-3 text-center">Aging (0-30d / 31-60d / 60+d)</th>
+                    <th className="p-3 text-center">Guard Status</th>
                     <th className="p-3 text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 bg-slate-950/40">
                   {customers.map((c) => {
-                    const avail = Math.max(0, c.credit_limit_paise - c.current_balance_paise);
-                    const usage =
-                      c.credit_limit_paise > 0
-                        ? Math.round((c.current_balance_paise / c.credit_limit_paise) * 100)
-                        : 0;
+                    const cSummary = WholesaleDataService.getCustomerCreditSummary(c.id);
+                    const avail = cSummary.available_credit_paise;
+                    const usage = cSummary.credit_utilization_pct;
 
                     return (
                       <tr key={c.id} className="hover:bg-slate-900/60 transition">
@@ -1319,14 +1468,52 @@ export const WholesaleBilling: React.FC = () => {
                           <span className="text-[10px] text-slate-400">State {c.state_code}</span>
                         </td>
                         <td className="p-3 text-right font-mono font-bold text-slate-300">
-                          ₹{(c.credit_limit_paise / 100).toLocaleString('en-IN')}
+                          {formatPaise(c.credit_limit_paise)}
                         </td>
                         <td className="p-3 text-right font-mono font-bold text-amber-400">
-                          ₹{(c.current_balance_paise / 100).toLocaleString('en-IN')}
-                          <span className="block text-[10px] text-slate-500 font-normal">{usage}% used</span>
+                          {formatPaise(cSummary.total_outstanding_paise)}
+                          <span className="block text-[10px] text-slate-500 font-normal">{usage}% limit used</span>
                         </td>
-                        <td className="p-3 text-right font-mono font-bold text-emerald-400">
-                          ₹{(avail / 100).toLocaleString('en-IN')}
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center space-x-1 font-mono text-[10px]">
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30" title="0-30 Days">
+                              {formatPaise(cSummary.current_0_30_paise)}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded border ${cSummary.overdue_31_60_paise > 0 ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-slate-900 text-slate-500 border-slate-800'}`} title="31-60 Days Overdue">
+                              {formatPaise(cSummary.overdue_31_60_paise)}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded border ${cSummary.critical_overdue_60_plus_paise > 0 ? 'bg-rose-500/10 text-rose-300 border-rose-500/30 font-bold' : 'bg-slate-900 text-slate-500 border-slate-800'}`} title="60+ Days Critical Overdue">
+                              {formatPaise(cSummary.critical_overdue_60_plus_paise)}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-flex items-center gap-1 ${
+                              cSummary.credit_risk_level === 'BLOCKED'
+                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
+                                : cSummary.credit_risk_level === 'WARNING'
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                            }`}
+                          >
+                            {cSummary.credit_risk_level === 'BLOCKED' ? (
+                              <>
+                                <ShieldAlert className="w-3 h-3 text-rose-400" />
+                                <span>BLOCKED</span>
+                              </>
+                            ) : cSummary.credit_risk_level === 'WARNING' ? (
+                              <>
+                                <AlertTriangle className="w-3 h-3 text-amber-400" />
+                                <span>WARNING</span>
+                              </>
+                            ) : (
+                              <>
+                                <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                                <span>APPROVED</span>
+                              </>
+                            )}
+                          </span>
                         </td>
                         <td className="p-3 text-center">
                           <button
@@ -1353,7 +1540,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 2.5: WHOLESALE STOCK INWARD & GOODS RECEIVED (GRN)
       --------------------------------------------------------------------- */}
       {activeTab === 'STOCK_INWARD' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* Key Financial Metric Tiles (Wholesale Sales vs Inward Purchases) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-sm">
@@ -1362,7 +1549,7 @@ export const WholesaleBilling: React.FC = () => {
                 <Receipt className="w-4 h-4 text-blue-400" />
               </div>
               <div className="text-xl font-black text-blue-400 font-mono mt-1">
-                ₹{formatPaise(invoices.reduce((s, inv) => s + inv.total_paise, 0))}
+                {formatPaise(invoices.reduce((s, inv) => s + inv.total_paise, 0))}
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5">
                 {invoices.length} posted B2B tax invoices
@@ -1375,7 +1562,7 @@ export const WholesaleBilling: React.FC = () => {
                 <Truck className="w-4 h-4 text-amber-400" />
               </div>
               <div className="text-xl font-black text-amber-400 font-mono mt-1">
-                ₹{formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
+                {formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5">
                 {stockVouchers.length} goods received notes (GRN)
@@ -1393,7 +1580,7 @@ export const WholesaleBilling: React.FC = () => {
                 const diff = totalSold - totalPur;
                 return (
                   <div className={`text-xl font-black font-mono mt-1 ${diff >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    ₹{formatPaise(Math.abs(diff))} {diff < 0 && '(Deficit)'}
+                    {formatPaise(Math.abs(diff))} {diff < 0 && '(Deficit)'}
                   </div>
                 );
               })()}
@@ -1500,13 +1687,13 @@ export const WholesaleBilling: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono text-slate-300">
-                            ₹{formatPaise(item.purchase_rate_paise)}
+                            {formatPaise(item.purchase_rate_paise)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-blue-400">
-                            ₹{formatPaise(item.wholesale_rate_paise)}
+                            {formatPaise(item.wholesale_rate_paise)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono text-slate-400">
-                            ₹{formatPaise(item.mrp_paise)}
+                            {formatPaise(item.mrp_paise)}
                           </td>
                         </tr>
                       );
@@ -1690,10 +1877,10 @@ export const WholesaleBilling: React.FC = () => {
                                 {l.quantity.toLocaleString('en-IN')} units
                               </td>
                               <td className="py-2 px-3 text-right font-mono text-slate-300">
-                                ₹{formatPaise(l.purchaseRatePaise)}
+                                {formatPaise(l.purchaseRatePaise)}
                               </td>
                               <td className="py-2 px-3 text-right font-mono font-bold text-emerald-400">
-                                ₹{formatPaise(lineTotal)}
+                                {formatPaise(lineTotal)}
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <button
@@ -1717,7 +1904,7 @@ export const WholesaleBilling: React.FC = () => {
                   <div>
                     <span className="text-xs text-slate-400 mr-2">Total Inward Purchase Outflow:</span>
                     <span className="text-xl font-black font-mono text-emerald-400">
-                      ₹{formatPaise(inwardLines.reduce((s, l) => s + l.quantity * l.purchaseRatePaise, 0))}
+                      {formatPaise(inwardLines.reduce((s, l) => s + l.quantity * l.purchaseRatePaise, 0))}
                     </span>
                   </div>
 
@@ -1776,7 +1963,7 @@ export const WholesaleBilling: React.FC = () => {
                 <div className="text-right">
                   <span className="text-xs text-slate-400">Total Inward Value:</span>
                   <span className="text-base font-bold text-emerald-400 font-mono ml-2">
-                    ₹{formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
+                    {formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
                   </span>
                 </div>
               </div>
@@ -1788,7 +1975,7 @@ export const WholesaleBilling: React.FC = () => {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase text-[10px]">
+                    <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase text-[10px] sticky top-0 z-10">
                       <tr>
                         <th className="py-2.5 px-3">GRN #</th>
                         <th className="py-2.5 px-3">Date</th>
@@ -1812,7 +1999,7 @@ export const WholesaleBilling: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">
-                            ₹{formatPaise(v.totalExpensePaise)}
+                            {formatPaise(v.totalExpensePaise)}
                           </td>
                           <td className="py-2.5 px-3 text-center">
                             <button
@@ -1842,7 +2029,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 3: VOLUME PRICING SLABS & REBATES
       --------------------------------------------------------------------- */}
       {activeTab === 'PRICING_TIERS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
@@ -1929,7 +2116,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 4: LOGISTICS EXPENSES & FLEET VOUCHERS
       --------------------------------------------------------------------- */}
       {activeTab === 'EXPENSES' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* RECORD EXPENSE FORM */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
@@ -2036,13 +2223,13 @@ export const WholesaleBilling: React.FC = () => {
                   Logistics & Distribution Vouchers Log
                 </h3>
                 <span className="text-xs font-mono font-bold text-blue-400">
-                  Total: ₹{formatPaise(expenses.reduce((acc, e) => acc + e.amount_paise, 0))}
+                  Total: {formatPaise(expenses.reduce((acc, e) => acc + e.amount_paise, 0))}
                 </span>
               </div>
 
               <div className="overflow-x-auto border border-slate-800 rounded-xl max-h-[500px]">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-950 text-slate-400 font-bold border-b border-slate-800">
+                  <thead className="bg-slate-950 text-slate-400 font-bold border-b border-slate-800 sticky top-0 z-10">
                     <tr>
                       <th className="p-2.5">Date / Voucher</th>
                       <th className="p-2.5">Category</th>
@@ -2081,7 +2268,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 5: B2B SALES & GSTR-1 REPORTS
       --------------------------------------------------------------------- */}
       {activeTab === 'REPORTS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* STATS OVERVIEW CARDS */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
@@ -2089,7 +2276,7 @@ export const WholesaleBilling: React.FC = () => {
                 Total B2B Billing (Gross)
               </span>
               <div className="text-2xl font-black font-mono text-blue-400 mt-1">
-                ₹{formatPaise(invoices.reduce((acc, inv) => acc + inv.total_paise, 0))}
+                {formatPaise(invoices.reduce((acc, inv) => acc + inv.total_paise, 0))}
               </div>
               <span className="text-[10px] text-slate-500 mt-1 block">
                 Across {invoices.length} Tax Invoices
@@ -2101,7 +2288,7 @@ export const WholesaleBilling: React.FC = () => {
                 Active B2B Credit Ledger
               </span>
               <div className="text-2xl font-black font-mono text-amber-400 mt-1">
-                ₹{formatPaise(customers.reduce((acc, c) => acc + c.current_balance_paise, 0))}
+                {formatPaise(customers.reduce((acc, c) => acc + c.current_balance_paise, 0))}
               </div>
               <span className="text-[10px] text-slate-500 mt-1 block">Due across {customers.length} distributor accounts</span>
             </div>
@@ -2111,7 +2298,6 @@ export const WholesaleBilling: React.FC = () => {
                 GST Liability (Output Tax)
               </span>
               <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-                ₹
                 {formatPaise(
                   invoices.reduce((acc, inv) => acc + inv.cgst_paise + inv.sgst_paise + inv.igst_paise, 0)
                 )}
@@ -2124,7 +2310,7 @@ export const WholesaleBilling: React.FC = () => {
                 Logistics & Fleet Costs
               </span>
               <div className="text-2xl font-black font-mono text-purple-400 mt-1">
-                ₹{formatPaise(expenses.reduce((acc, e) => acc + e.amount_paise, 0))}
+                {formatPaise(expenses.reduce((acc, e) => acc + e.amount_paise, 0))}
               </div>
               <span className="text-[10px] text-slate-500 mt-1 block">Fuel, tolls, and loading hamali</span>
             </div>
@@ -2245,7 +2431,7 @@ export const WholesaleBilling: React.FC = () => {
           TAB 6: INVOICE CUSTOMIZER & LIVE WATERMARK PREVIEW
       --------------------------------------------------------------------- */}
       {activeTab === 'INVOICE_SETTINGS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* SETTINGS FORM */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
@@ -2747,7 +2933,7 @@ export const WholesaleBilling: React.FC = () => {
                   {lastReceipt.lines.map((l) => (
                     <div key={l.id} className="flex justify-between text-slate-800">
                       <span>{l.name}</span>
-                      <span className="font-mono">₹{formatPaise(l.line_total_paise)}</span>
+                      <span className="font-mono">{formatPaise(l.line_total_paise)}</span>
                     </div>
                   ))}
                 </div>
@@ -2755,8 +2941,13 @@ export const WholesaleBilling: React.FC = () => {
                 <div className="border-t border-slate-200 pt-2 flex justify-between font-black text-sm">
                   <span>Total Amount (INR):</span>
                   <span className="text-blue-700 font-mono">
-                    ₹{formatPaise(lastReceipt.totals.total_amount_paise)}
+                    {formatPaise(lastReceipt.totals.total_amount_paise)}
                   </span>
+                </div>
+
+                {/* GST Mandate: Amount in Words */}
+                <div className="text-[10px] text-slate-600 italic pt-1 leading-snug">
+                  <span className="font-semibold not-italic">Amount in Words:</span> {paiseToWords(lastReceipt.totals.total_amount_paise)}
                 </div>
               </div>
             </div>
@@ -2764,6 +2955,7 @@ export const WholesaleBilling: React.FC = () => {
             {/* ACTION DISPATCH CONTROLS */}
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => window.print()}
                 className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition cursor-pointer"
               >
@@ -2793,16 +2985,23 @@ export const WholesaleBilling: React.FC = () => {
 
       {/* MODAL: Add New Wholesale Commodity to Master Catalog */}
       {isNewWholesaleItemModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl animate-in zoom-in-95">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-150">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 space-y-4 shadow-2xl animate-in zoom-in-95"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-commodity-title"
+          >
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 <Package className="w-5 h-5 text-blue-400" />
-                <h3 className="text-sm font-bold text-white">Add New Wholesale Trade Commodity</h3>
+                <h3 id="new-commodity-title" className="text-sm font-bold text-white">Add New Wholesale Trade Commodity</h3>
               </div>
               <button
+                type="button"
                 onClick={() => setIsNewWholesaleItemModalOpen(false)}
-                className="text-slate-400 hover:text-white cursor-pointer"
+                className="text-slate-400 hover:text-white cursor-pointer focus-ring p-1 rounded"
+                aria-label="Close add commodity dialog"
               >
                 <X className="w-4 h-4" />
               </button>

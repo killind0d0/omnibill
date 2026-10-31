@@ -11,11 +11,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onLoginSuccess,
   errorMessage,
 }) => {
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
-  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
-  const [totpCode, setTotpCode] = useState('');
-  const [recoveryCode, setRecoveryCode] = useState('');
   const [error, setError] = useState(errorMessage || '');
   const [loading, setLoading] = useState(false);
 
@@ -28,29 +25,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    if (!useRecoveryCode && !totpCode.trim()) {
-      setError('6-digit authenticator code is required');
-      return;
-    }
-
-    if (useRecoveryCode && !recoveryCode.trim()) {
-      setError('Emergency recovery code is required');
-      return;
-    }
-
     setLoading(true);
 
     try {
-      const payload: Record<string, string> = {
+      const payload = {
         username: username.trim(),
         password,
       };
-
-      if (useRecoveryCode) {
-        payload.recovery_code = recoveryCode.trim();
-      } else {
-        payload.totp_code = totpCode.trim();
-      }
 
       const res = await apiRequest<{
         success: boolean;
@@ -89,7 +70,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             Control Plane
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Sign in to access admin console
+            Sign in with Super Admin credentials
           </p>
         </div>
 
@@ -132,66 +113,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             />
           </div>
 
-          {!useRecoveryCode ? (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-slate-300">
-                  6-Digit Authenticator Code
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUseRecoveryCode(true);
-                    setTotpCode('');
-                  }}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 transition"
-                >
-                  Use recovery code
-                </button>
-              </div>
-              <input
-                type="text"
-                maxLength={6}
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 placeholder-slate-500 text-sm font-mono tracking-widest text-center focus:outline-none focus:border-emerald-500 transition"
-                placeholder="123456"
-                disabled={loading}
-              />
-            </div>
-          ) : (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-slate-300">
-                  Emergency Recovery Code
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUseRecoveryCode(false);
-                    setRecoveryCode('');
-                  }}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 transition"
-                >
-                  Use 6-digit TOTP
-                </button>
-              </div>
-              <input
-                type="text"
-                value={recoveryCode}
-                onChange={(e) => setRecoveryCode(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 placeholder-slate-500 text-sm font-mono text-center focus:outline-none focus:border-emerald-500 transition"
-                placeholder="REC-XXXX-XXXX"
-                disabled={loading}
-              />
-            </div>
-          )}
-
           <div className="pt-2">
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm rounded-lg shadow-lg shadow-emerald-500/20 focus:outline-none transition disabled:opacity-50"
+              className="w-full py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm rounded-lg shadow-lg shadow-emerald-500/20 focus:outline-none transition disabled:opacity-50 cursor-pointer"
             >
               {loading ? 'Authenticating...' : 'Sign In'}
             </button>

@@ -324,9 +324,10 @@ fn test_rollup_reconcile_and_rebuild() {
     let ledger_net_sum: i64 = conn
         .query_row(
             "SELECT
-                 COALESCE(SUM(credit_paise - debit_paise), 0)
-             FROM ledger_entries
-             WHERE account_id IN ('acc_4000', 'acc_4010')",
+                 COALESCE(SUM(le.credit_paise - le.debit_paise), 0)
+             FROM ledger_entries le
+             JOIN transactions t ON t.id = le.transaction_id
+             WHERE le.account_id IN ('acc_4000', 'acc_4010') AND t.status = 'POSTED'",
             [],
             |r| r.get(0),
         )

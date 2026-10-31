@@ -50,5 +50,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("/api/discovery/day_summary", "cmd_day_summary_text"),
     ("/api/backup/create", "cmd_backup_create"),
     ("/api/backup/restore", "cmd_backup_restore"),
+    ("/api/backup/list", "cmd_backup_list"),
+    ("/api/backup/health", "cmd_backup_health"),
     ("/api/print/receipt", "cmd_print_receipt"),
 ];

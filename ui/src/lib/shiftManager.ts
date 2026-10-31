@@ -1,6 +1,8 @@
 // ui/src/lib/shiftManager.ts
 // Cash Drawer Shift Accounting & Z-Report Settlement Engine
 
+import { ErpStorageService } from './erpStorage';
+
 export interface ShiftDenominations {
   d500: number;
   d200: number;
@@ -72,11 +74,16 @@ export class ShiftManager {
     if (typeof window === 'undefined') return;
     try {
       if (this.currentShift) {
-        localStorage.setItem(STORAGE_KEY_CURRENT_SHIFT, JSON.stringify(this.currentShift));
+        const serialized = JSON.stringify(this.currentShift);
+        localStorage.setItem(STORAGE_KEY_CURRENT_SHIFT, serialized);
+        ErpStorageService.syncKeyToBackend(STORAGE_KEY_CURRENT_SHIFT, serialized);
       } else {
         localStorage.removeItem(STORAGE_KEY_CURRENT_SHIFT);
+        ErpStorageService.syncKeyToBackend(STORAGE_KEY_CURRENT_SHIFT, '');
       }
-      localStorage.setItem(STORAGE_KEY_SHIFT_HISTORY, JSON.stringify(this.history));
+      const histStr = JSON.stringify(this.history);
+      localStorage.setItem(STORAGE_KEY_SHIFT_HISTORY, histStr);
+      ErpStorageService.syncKeyToBackend(STORAGE_KEY_SHIFT_HISTORY, histStr);
     } catch (e) {
       console.warn('Failed to save shift state:', e);
     }

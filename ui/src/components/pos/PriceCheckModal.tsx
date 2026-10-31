@@ -148,7 +148,7 @@ export const PriceCheckModal: React.FC<PriceCheckModalProps> = ({
               <div className="text-right">
                 <span className="text-[10px] text-slate-400 uppercase font-semibold block">Counter Price</span>
                 <span className="text-2xl font-black text-cyan-400 font-mono">
-                  ₹{formatPaise(selectedProduct.base_price_paise)}
+                  {formatPaise(selectedProduct.base_price_paise)}
                 </span>
                 <span className="text-[10px] text-slate-500 block">per {selectedProduct.unit}</span>
               </div>
@@ -171,7 +171,7 @@ export const PriceCheckModal: React.FC<PriceCheckModalProps> = ({
               <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
                 <div className="text-[10px] text-slate-400 font-medium">Est. Cost</div>
                 <div className="text-xs font-bold text-slate-300 font-mono mt-0.5">
-                  ₹{formatPaise(selectedProduct.cost_price_paise)}
+                  {formatPaise(selectedProduct.cost_price_paise)}
                 </div>
               </div>
             </div>
@@ -186,7 +186,7 @@ export const PriceCheckModal: React.FC<PriceCheckModalProps> = ({
                 <button
                   type="button"
                   onClick={handleAddAndClose}
-                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-lg shadow-cyan-600/20"
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-lg shadow-cyan-600/20 focus-ring"
                 >
                   <ShoppingCart className="w-3.5 h-3.5" />
                   <span>+ Add to Active Cart</span>

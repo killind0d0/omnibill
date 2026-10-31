@@ -38,6 +38,22 @@ export interface WholesaleCustomer extends BaseEntity {
   shipping_address?: string;
 }
 
+// B2B Wholesale Customer Credit Aging Summary
+export interface CustomerCreditSummary {
+  customer_id: string;
+  customer_name: string;
+  credit_limit_paise: number;
+  total_outstanding_paise: number;
+  available_credit_paise: number;
+  current_0_30_paise: number;
+  overdue_31_60_paise: number;
+  critical_overdue_60_plus_paise: number;
+  credit_utilization_pct: number;
+  is_over_limit: boolean;
+  has_critical_overdue: boolean;
+  credit_risk_level: 'SAFE' | 'WARNING' | 'BLOCKED';
+}
+
 // School Student
 export interface StudentEntity extends BaseEntity {
   entity_type: 'STUDENT';
@@ -402,6 +418,10 @@ export interface VerticalCartLine {
   // School-specific line properties
   fee_head_category?: 'Tuition' | 'Transport' | 'Examination' | 'Lab' | 'Sports' | 'Library' | 'Admission';
   term_name?: string; // e.g. "Term 1 (Apr-Jun)"
+
+  // Return / Exchange metadata
+  is_return?: boolean; // true if this line is an item return / exchange
+  return_reason?: string;
 
   // Computed values
   gross_paise: number;

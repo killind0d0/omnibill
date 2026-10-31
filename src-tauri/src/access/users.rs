@@ -262,7 +262,8 @@ pub fn authenticate(
             "SELECT id, username, display_name, password_hash, role, is_primary_owner, is_active,
                 must_change_password, failed_attempts, locked_until_ms
          FROM app_users
-         WHERE username = ?1 COLLATE NOCASE",
+         WHERE username = ?1 COLLATE NOCASE
+         LIMIT 1",
             params![username],
             |r| {
                 Ok((
@@ -385,6 +386,180 @@ pub fn authenticate(
         "auth.login_ok",
         &found_username,
         "Login successful",
+    );
+
+    Ok(AuthenticatedUser {
+        id,
+        username: found_username,
+        display_name,
+        role,
+        is_primary_owner,
+        must_change_password,
+    })
+}
+
+/// Verifies supervisor PIN / manager authorization for supervisor-protected actions:
+/// (e.g. price override, bill cancel, credit limit bypass, cart void, negative margin).
+///
+/// Enforces:
+/// 1. Supervisor authorization: user must have 'owner', 'admin', or 'manager' role.
+/// 2. Monitored rate-limiting: consecutive wrong PIN attempts increment `failed_attempts`.
+/// 3. Lockout enforcement: upon reaching consecutive failed PIN attempts (LOCKOUT_FAILED_ATTEMPTS),
+///    the supervisor account is locked for 15 minutes (`locked_until_ms`), rejecting subsequent PIN checks.
+/// 4. Cryptographic audit:
+///    - On failure: logs `auth.override_fail`.
+///    - On lockout: logs `auth.locked` with reason "Supervisor override PIN lockout".
+///    - On success: logs `financial.override` with supervisor username, override type, and reason.
+pub fn verify_supervisor_pin_override(
+    conn: &Connection,
+    supervisor_username: &str,
+    supervisor_pin: &str,
+    override_type: &str,
+    reason: &str,
+    now_ms: i64,
+) -> Result<AuthenticatedUser, AuthError> {
+    let row = conn
+        .query_row(
+            "SELECT id, username, display_name, password_hash, role, is_primary_owner, is_active,
+                must_change_password, failed_attempts, locked_until_ms
+         FROM app_users
+         WHERE username = ?1 COLLATE NOCASE
+         LIMIT 1",
+            params![supervisor_username],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)? == 1,
+                    r.get::<_, i64>(6)? == 1,
+                    r.get::<_, i64>(7)? == 1,
+                    r.get::<_, u32>(8)?,
+                    r.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    let (
+        id,
+        found_username,
+        display_name,
+        password_hash,
+        role,
+        is_primary_owner,
+        is_active,
+        must_change_password,
+        failed_attempts,
+        locked_until_ms,
+    ) = match row {
+        Some(u) => u,
+        None => {
+            dummy_verify();
+            record_auth_event(
+                Some(conn),
+                now_ms,
+                "auth.override_fail",
+                "unknown",
+                &format!("Supervisor override attempted for unknown user; type: {}, reason: {}", override_type, reason),
+            );
+            return Err(AuthError::InvalidCredentials);
+        }
+    };
+
+    // Role check: supervisor override requires manager, admin, or owner
+    let role_lower = role.to_lowercase();
+    if role_lower != "owner" && role_lower != "admin" && role_lower != "manager" {
+        record_auth_event(
+            Some(conn),
+            now_ms,
+            "auth.override_denied",
+            &found_username,
+            &format!("User role '{}' lacks supervisor override authority", role),
+        );
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    if !is_active {
+        dummy_verify();
+        record_auth_event(
+            Some(conn),
+            now_ms,
+            "auth.override_fail",
+            &found_username,
+            "Account inactive",
+        );
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    // Check if supervisor is currently locked out
+    if locked_until_ms > now_ms {
+        record_auth_event(
+            Some(conn),
+            now_ms,
+            "auth.locked",
+            &found_username,
+            &format!("Supervisor override PIN rejected: account locked until {}", locked_until_ms),
+        );
+        return Err(AuthError::Locked {
+            until_ms: locked_until_ms,
+        });
+    }
+
+    // Verify PIN / password
+    let valid = verify_password(&password_hash, supervisor_pin);
+    if !valid {
+        let new_failed = failed_attempts + 1;
+        if new_failed >= LOCKOUT_FAILED_ATTEMPTS {
+            let lock_until = now_ms + LOCKOUT_MINUTES * 60_000;
+            conn.execute(
+                "UPDATE app_users
+                 SET failed_attempts = 0, locked_until_ms = ?1, updated_ms = ?2
+                 WHERE id = ?3",
+                params![lock_until, now_ms, id],
+            )?;
+            record_auth_event(
+                Some(conn),
+                now_ms,
+                "auth.locked",
+                &found_username,
+                &format!("Supervisor PIN locked out after {} failed attempts; override_type: {}", new_failed, override_type),
+            );
+        } else {
+            conn.execute(
+                "UPDATE app_users
+                 SET failed_attempts = ?1, updated_ms = ?2
+                 WHERE id = ?3",
+                params![new_failed, now_ms, id],
+            )?;
+            record_auth_event(
+                Some(conn),
+                now_ms,
+                "auth.override_fail",
+                &found_username,
+                &format!("Incorrect supervisor PIN ({}/{} attempts); override_type: {}", new_failed, LOCKOUT_FAILED_ATTEMPTS, override_type),
+            );
+        }
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    // PIN verified successfully: reset failed attempts
+    conn.execute(
+        "UPDATE app_users
+         SET failed_attempts = 0, locked_until_ms = 0, updated_ms = ?1
+         WHERE id = ?2",
+        params![now_ms, id],
+    )?;
+
+    // Record persistent audit entry for supervisor override with reason code
+    record_auth_event(
+        Some(conn),
+        now_ms,
+        "financial.override",
+        &found_username,
+        &format!("Supervisor override authorized for [{}]. Reason: {}", override_type, reason),
     );
 
     Ok(AuthenticatedUser {

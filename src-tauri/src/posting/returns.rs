@@ -268,7 +268,7 @@ pub fn post_sale_return(
             cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
             notes, created_by_user_id, transaction_type, original_transaction_id, invoice_date
         ) VALUES (
-            ?1, 'POSTED', ?2, ?3, ?4,
+            ?1, 'DRAFT', ?2, ?3, ?4,
             ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, 'SALE_RETURN', ?17, ?18
@@ -664,6 +664,11 @@ pub fn post_sale_return(
         )?;
     }
 
+    tx.execute(
+        "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+        params![&tx_id],
+    )?;
+
     tx.commit()?;
 
     Ok(PostedReturn {
@@ -750,30 +755,10 @@ pub fn cancel_posted_sale(conn: &mut Connection, transaction_id: &str) -> Result
         )?;
     }
 
-    // Reverse ledger entries (swapping debits and credits)
-    let le_rows: Vec<(String, i64, i64, String)> = {
-        let mut le_stmt = tx.prepare(
-            "SELECT account_id, debit_paise, credit_paise, narration
-             FROM ledger_entries
-             WHERE transaction_id = ?1",
-        )?;
-        le_stmt
-            .query_map(params![transaction_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-    };
-
-    for (account_id, debit, credit, narration) in le_rows {
-        let le_id = generate_id(&tx, "le")?;
-        tx.execute(
-            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
-             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6)",
-            params![&le_id, transaction_id, &account_id, credit, debit, format!("Cancel: {}", narration)],
-        )?;
-    }
-
-    // Update transaction status from POSTED to CANCELLED
+    // Update transaction status from POSTED to CANCELLED.
+    // Under Migration 10, POSTED ledger entries are frozen and immutable.
+    // Transitioning status to CANCELLED automatically voids the voucher and excludes
+    // its original lines from all trial balance, daybook, and financial statements.
     tx.execute(
         "UPDATE transactions SET status = 'CANCELLED' WHERE id = ?1",
         params![transaction_id],
@@ -941,7 +926,7 @@ pub fn post_purchase_return(
             cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
             notes, created_by_user_id, transaction_type, original_transaction_id, invoice_date
         ) VALUES (
-            ?1, 'POSTED', ?2, ?3, ?4,
+            ?1, 'DRAFT', ?2, ?3, ?4,
             ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, 'PURCHASE_RETURN', ?17, ?18
@@ -1247,6 +1232,11 @@ pub fn post_purchase_return(
         )?;
     }
 
+    tx.execute(
+        "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+        params![&tx_id],
+    )?;
+
     tx.commit()?;
 
     Ok(PostedReturn {
@@ -1486,7 +1476,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                ?1, 'POSTED', '27', '27', 'PUR',
+                ?1, 'DRAFT', '27', '27', 'PUR',
                 'PUR/26-27/0001', 'ent_supp_1', 20000, 0, 20000,
                 1800, 1800, 0, 0, 23600,
                 'PURCHASE', NULL, '2026-04-10', 'usr_1'
@@ -1528,7 +1518,12 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
-             VALUES ('le_p4', ?1, 'acc_2000', 0, 23600, 'Accounts payable')",
+             VALUES ('le_p4', ?1, 'acc_2000', 0, 23600, 'Accounts Payable')",
+            params![tx_purch_id],
+        ).unwrap();
+
+        conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
             params![tx_purch_id],
         ).unwrap();
 
@@ -1640,7 +1635,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                ?1, 'POSTED', '27', '27', 'PUR',
+                ?1, 'DRAFT', '27', '27', 'PUR',
                 'PUR/26-27/0002', 'ent_supp_1', 10000, 0, 10000,
                 900, 900, 0, 0, 11800,
                 'PURCHASE', NULL, '2026-04-10', 'usr_1'
@@ -1648,6 +1643,22 @@ mod tests {
             params![tx_purch_id],
         )
         .unwrap();
+
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('le_t2_1', ?1, 'acc_1200', 11800, 0, 'Inventory')",
+            params![tx_purch_id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('le_t2_2', ?1, 'acc_2000', 0, 11800, 'Accounts Payable')",
+            params![tx_purch_id],
+        ).unwrap();
+
+        conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+            params![tx_purch_id],
+        ).unwrap();
 
         // Attempting sale return on purchase transaction must fail
         let input = SaleReturnInput {
@@ -1903,7 +1914,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                ?1, 'POSTED', '27', '27', 'PUR',
+                ?1, 'DRAFT', '27', '27', 'PUR',
                 'PUR/26-27/0003', 'ent_supp_1', 10000, 0, 10000,
                 900, 900, 0, 0, 11800,
                 'PURCHASE', NULL, '2026-04-10', 'usr_1'
@@ -1911,6 +1922,22 @@ mod tests {
             params![tx_purch_id],
         )
         .unwrap();
+
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('le_t3_1', ?1, 'acc_1200', 11800, 0, 'Inventory')",
+            params![tx_purch_id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('le_t3_2', ?1, 'acc_2000', 0, 11800, 'Accounts Payable')",
+            params![tx_purch_id],
+        ).unwrap();
+
+        conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+            params![tx_purch_id],
+        ).unwrap();
 
         conn.execute(
             "INSERT INTO transaction_items (

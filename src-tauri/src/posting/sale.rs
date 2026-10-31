@@ -36,6 +36,9 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
         });
     }
 
+    // Period lock guard: reject back-dating into closed periods
+    super::check_period_lock(conn, &input.invoice_date)?;
+
     // 1. Validate and compute all amounts before opening writes
     let computation = compute_sale(input)?;
 
@@ -118,7 +121,7 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
             transaction_type, original_transaction_id, invoice_date, created_by_user_id,
             price_mode
         ) VALUES (
-            ?1, 'POSTED', ?2, ?3, ?4,
+            ?1, 'DRAFT', ?2, ?3, ?4,
             ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14,
             'SALE', NULL, ?15, ?16,
@@ -527,6 +530,12 @@ pub fn post_sale(conn: &mut Connection, input: &SaleInput) -> Result<PostedSale,
         computation.totals.taxable_paise,
     )?;
 
+    // 7.5 Transition status DRAFT -> POSTED (enforces commit-time Dr=Cr balance trigger)
+    tx.execute(
+        "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+        params![&tx_id],
+    )?;
+
     // 8. Commit transaction
     tx.commit()?;
 
@@ -561,6 +570,9 @@ pub fn post_sale_with_payments(
             foreign_keys,
         });
     }
+
+    // Period lock guard: reject back-dating into closed periods
+    super::check_period_lock(conn, &input.sale.invoice_date)?;
 
     // 1. Validate and compute sale math
     let computation = compute_sale(&input.sale)?;
@@ -658,7 +670,7 @@ pub fn post_sale_with_payments(
             transaction_type, original_transaction_id, invoice_date, created_by_user_id,
             price_mode
         ) VALUES (
-            ?1, 'POSTED', ?2, ?3, ?4,
+            ?1, 'DRAFT', ?2, ?3, ?4,
             ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14,
             'SALE', NULL, ?15, ?16,
@@ -1139,6 +1151,12 @@ pub fn post_sale_with_payments(
         b_day,
         b_hour,
         computation.totals.taxable_paise,
+    )?;
+
+    // Transition status DRAFT -> POSTED (enforces commit-time Dr=Cr balance trigger)
+    tx.execute(
+        "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+        params![&tx_id],
     )?;
 
     // Single atomic commit for invoice + tenders

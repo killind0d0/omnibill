@@ -11,6 +11,8 @@ export interface ResourceItem {
   base_price_paise: number; // Price in paise (e.g. 10000 = ₹100.00)
   cost_price_paise: number;
   stock_milli: number; // in milli-units (e.g. 50000 = 50.000 items)
+  expiry_date?: string;
+  batch_number?: string;
 }
 
 export interface CartLineItem {
@@ -25,6 +27,10 @@ export interface CartLineItem {
   unit_price_paise: number; // integer paise
   discount_paise: number; // integer paise
   tax_rate_bps: number; // integer basis points
+  is_return?: boolean; // true if this line is a customer return / exchange
+  return_reason?: string;
+  expiry_date?: string;
+  batch_number?: string;
   
   // Computed fields (mirroring tax.rs)
   gross_paise: number;
@@ -73,6 +79,7 @@ export interface PaymentDetails {
   cash_tendered_paise?: number;
   upi_amount_paise?: number;
   card_amount_paise?: number;
+  credit_amount_paise?: number;
   change_due_paise: number;
   reference_number?: string;
 }

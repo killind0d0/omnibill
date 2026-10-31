@@ -1,4 +1,5 @@
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -34,8 +35,28 @@ use tower_http::services::{ServeDir, ServeFile};
 pub struct AppState {
     pub db_path: PathBuf,
     pub server_secret: String,
+    pub webhook_secret: Option<String>,
     pub signing_key: Arc<SigningKey>,
     pub rate_limiter: Arc<SlidingWindowLimiter>,
+    pub signaling: Arc<crate::signaling::SignalingHub>,
+}
+
+impl AppState {
+    pub fn new(
+        db_path: PathBuf,
+        server_secret: String,
+        signing_key: Arc<SigningKey>,
+        rate_limiter: Arc<SlidingWindowLimiter>,
+    ) -> Self {
+        Self {
+            db_path,
+            server_secret,
+            webhook_secret: None,
+            signing_key,
+            rate_limiter,
+            signaling: crate::signaling::SignalingHub::new(),
+        }
+    }
 }
 
 pub async fn admin_mutating_header_middleware(
@@ -56,6 +77,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/v1/activate", post(activate_handler))
         .route("/v1/checkin", post(checkin_handler))
         .route("/v1/owner-reset", post(owner_reset_handler))
+        // Payment Webhook endpoints
+        .route("/v1/webhooks/payment", post(payment_webhook_handler))
+        .route("/v1/webhooks/razorpay", post(payment_webhook_handler))
+        // WebRTC Remote Support Signaling
+        .route("/v1/support/ws/{pin}", get(signaling_ws_pin_handler))
+        .route("/v1/support/ws", get(signaling_ws_query_handler))
+        .route("/v1/support/session", post(support_create_session_handler))
+        .route("/v1/support/session/{pin}", get(support_get_session_handler))
         // Admin auth endpoints
         .route("/v1/admin/login", post(admin_login_handler))
         .route("/v1/admin/logout", post(admin_logout_handler))
@@ -936,4 +965,170 @@ async fn admin_verify_audit_handler(
         )
             .into_response()),
     }
+}
+
+// ----------------------------------------------------------------------------
+// Payment Webhook Handlers
+// ----------------------------------------------------------------------------
+
+async fn payment_webhook_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut payload): Json<crate::payments::PaymentWebhookPayload>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let now_ms = get_now_ms();
+    let client_ip = extract_client_ip(
+        DEFAULT_PEER,
+        headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+    );
+
+    // Rate limit: 60/min
+    if !state
+        .rate_limiter
+        .check_and_record(&format!("webhook:{}", client_ip), now_ms)
+    {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Rate limit exceeded" })),
+        ));
+    }
+
+    // Signature fallback from headers: X-Razorpay-Signature or X-Signature
+    if payload.signature.trim().is_empty() {
+        if let Some(sig_hdr) = headers
+            .get("x-razorpay-signature")
+            .or_else(|| headers.get("x-signature"))
+            .and_then(|v| v.to_str().ok())
+        {
+            payload.signature = sig_hdr.to_string();
+        }
+    }
+
+    let secret = state
+        .webhook_secret
+        .clone()
+        .or_else(|| std::env::var("OMNIBILL_WEBHOOK_SECRET").ok())
+        .unwrap_or_else(|| state.server_secret.clone());
+
+    let mut conn = open_db(&state.db_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    match crate::payments::process_payment_webhook(
+        &mut conn,
+        &state.signing_key,
+        &payload,
+        &secret,
+        now_ms,
+    ) {
+        Ok(res) => Ok((StatusCode::OK, Json(res)).into_response()),
+        Err(err) => {
+            if err.contains("Invalid payment signature") {
+                Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": err })),
+                ))
+            } else if err.contains("Tenant not found") {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": err })),
+                ))
+            } else {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": err })),
+                ))
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// WebRTC Remote Support Signaling Handlers
+// ----------------------------------------------------------------------------
+
+async fn support_create_session_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let now_ms = get_now_ms();
+    let client_ip = extract_client_ip(
+        DEFAULT_PEER,
+        headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+    );
+
+    if !state
+        .rate_limiter
+        .check_and_record(&format!("support_create:{}", client_ip), now_ms)
+    {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "Rate limit exceeded" })),
+        ));
+    }
+
+    let pin = state.signaling.create_session().await;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "pin": pin,
+            "timeout_seconds": 1800
+        })),
+    )
+        .into_response())
+}
+
+async fn support_get_session_handler(
+    State(state): State<Arc<AppState>>,
+    Path(pin): Path<String>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let clean_pin = pin.trim().to_uppercase();
+    if let Some(peer_count) = state.signaling.room_peer_count(&clean_pin).await {
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "pin": clean_pin,
+                "active": true,
+                "peer_count": peer_count
+            })),
+        )
+            .into_response())
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "pin": clean_pin,
+                "active": false,
+                "error": "Room not found or expired"
+            })),
+        ))
+    }
+}
+
+async fn signaling_ws_pin_handler(
+    ws: WebSocketUpgrade,
+    Path(pin): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    ws.on_upgrade(move |socket| {
+        crate::signaling::handle_socket(socket, state.signaling.clone(), Some(pin))
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WsQuery {
+    pub pin: Option<String>,
+}
+
+async fn signaling_ws_query_handler(
+    ws: WebSocketUpgrade,
+    Query(query): Query<WsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    ws.on_upgrade(move |socket| {
+        crate::signaling::handle_socket(socket, state.signaling.clone(), query.pin)
+    })
 }

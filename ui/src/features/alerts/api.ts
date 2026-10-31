@@ -1,7 +1,28 @@
 // ui/src/features/alerts/api.ts
 // IPC & HTTP client for Inventory Risk & Day-Close Alerts
 
-import { getDbPath } from '../../lib/api';
+import { getDbPath, getActiveVertical } from '../../lib/api';
+
+const getHeaders = (vertical?: string): Record<string, string> => {
+  const v = (vertical || getActiveVertical()).toLowerCase();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Vertical': v,
+    'X-Business-Type': v.toUpperCase(),
+  };
+  if (typeof window !== 'undefined') {
+    try {
+      const sess = localStorage.getItem('omnibill_access_session');
+      if (sess) {
+        const parsed = JSON.parse(sess);
+        if (parsed.token) {
+          headers['Authorization'] = `Bearer ${parsed.token}`;
+        }
+      }
+    } catch {}
+  }
+  return headers;
+};
 
 export interface AlertItem {
   id: number;
@@ -46,7 +67,7 @@ export async function generateAlerts(
 
   const res = await fetch('http://127.0.0.1:4000/api/alerts/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(vertical),
     body: JSON.stringify({ vertical, today }),
   });
   if (!res.ok) {
@@ -67,7 +88,7 @@ export async function listAlerts(includeAcknowledged: boolean = false): Promise<
 
   const res = await fetch('http://127.0.0.1:4000/api/alerts/list', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(),
     body: JSON.stringify({ includeAcknowledged }),
   });
   if (!res.ok) {
@@ -90,7 +111,7 @@ export async function acknowledgeAlert(alertId: number, today?: number): Promise
 
   const res = await fetch('http://127.0.0.1:4000/api/alerts/acknowledge', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(),
     body: JSON.stringify({ alertId, today }),
   });
   if (!res.ok) {

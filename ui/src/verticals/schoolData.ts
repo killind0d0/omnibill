@@ -361,87 +361,69 @@ export const INITIAL_SCHOOL_EXPENSES: SchoolExpense[] = [
 // ----------------------------------------------------------------------------
 // 5. SEEDED PAYMENT AUDIT RECORDS
 // ----------------------------------------------------------------------------
-export const INITIAL_PAYMENT_RECORDS: SchoolFeePaymentRecord[] = [
-  {
-    id: 'rec_pay_001',
-    receipt_no: 'SCH-26-1001',
-    date: new Date().toISOString().split('T')[0],
-    time: '10:15:30',
-    student_id: 'ent_std_001',
-    admission_no: 'ADM-2020-044',
-    student_name: 'Aarav Rajesh Sharma',
-    class_name: 'Class 10',
-    section: 'A',
-    academic_year: '2026-2027',
-    months_paid: ['Apr', 'May', 'Jun', 'Jul'],
-    fee_heads: [
-      { name: 'Tuition Fee (Class 10)', amount_paise: 520000 },
-      { name: 'Computer & Science Lab', amount_paise: 100000 },
-      { name: 'Sports & Annual Function', amount_paise: 40000 },
-      { name: 'School Bus Transport', amount_paise: 120000 },
-    ],
-    subtotal_paise: 3440000,
-    concession_type: 'NONE',
-    concession_paise: 0,
-    net_amount_paise: 3440000,
-    payment_mode: 'UPI',
-    transaction_ref: 'UPI-9821-4432',
-    staff_name: 'Mrs. Sunita Rao (Counter 1)',
-    remarks: 'Term 1 Paid in full',
-  },
-  {
-    id: 'rec_pay_002',
-    receipt_no: 'SCH-26-1002',
-    date: new Date().toISOString().split('T')[0],
-    time: '11:40:15',
-    student_id: 'ent_std_003',
-    admission_no: 'ADM-2018-002',
-    student_name: 'Rohan Sunil Verma',
-    class_name: 'Class 12',
-    section: 'A',
-    academic_year: '2026-2027',
-    months_paid: ['Aug', 'Sep', 'Oct'],
-    fee_heads: [
-      { name: 'Tuition Fee (Class 12)', amount_paise: 700000 },
-      { name: 'Physics/Chem/Bio Labs', amount_paise: 150000 },
-      { name: 'Transport Facility', amount_paise: 120000 },
-    ],
-    subtotal_paise: 2910000,
-    concession_type: 'MERIT_10',
-    concession_paise: 291000,
-    net_amount_paise: 2619000,
-    payment_mode: 'BANK_TRANSFER',
-    transaction_ref: 'NEFT-ICICI-88219',
-    staff_name: 'Mr. Amit Shah (Counter 2)',
-    remarks: 'Merit Scholarship Applied',
-  },
-  {
-    id: 'rec_pay_003',
-    receipt_no: 'SCH-26-1003',
-    date: new Date().toISOString().split('T')[0],
-    time: '14:22:00',
-    student_id: 'ent_std_004',
-    admission_no: 'ADM-2024-055',
-    student_name: 'Priya Manish Kapoor',
-    class_name: 'Class 5',
-    section: 'A',
-    academic_year: '2026-2027',
-    months_paid: ['Sep', 'Oct'],
-    fee_heads: [
-      { name: 'Tuition Fee (Class 5)', amount_paise: 350000 },
-      { name: 'Computer Lab', amount_paise: 45000 },
-      { name: 'Sports & Transport', amount_paise: 155000 },
-    ],
-    subtotal_paise: 1100000,
-    concession_type: 'SIBLING_15',
-    concession_paise: 165000,
-    net_amount_paise: 935000,
-    payment_mode: 'CASH',
-    transaction_ref: 'CASH-REC-003',
-    staff_name: 'Mrs. Sunita Rao (Counter 1)',
-    remarks: 'Sibling Concession 15%',
-  },
-];
+const generateSeeded50SchoolFeePayments = (): SchoolFeePaymentRecord[] => {
+  const classes = ['Class 1', 'Class 4', 'Class 7', 'Class 9', 'Class 10', 'Class 12'];
+  const paymentModes: PaymentMode[] = ['UPI', 'CASH', 'BANK_TRANSFER', 'CARD'];
+  const list: SchoolFeePaymentRecord[] = [];
+  const today = new Date().toISOString().split('T')[0];
+
+  for (let s = 1; s <= 50; s++) {
+    const recNo = `REC-SCH-2026-${String(s).padStart(4, '0')}`;
+    const cls = classes[(s - 1) % classes.length];
+    const admNo = `ADM-2026-${1000 + s}`;
+    const stdName = `Student Roll #${s} (${cls})`;
+    const mode = paymentModes[(s - 1) % paymentModes.length];
+
+    const tuition = 1600000 + (s % 5) * 150000;
+    const transport = s % 2 === 0 ? 450000 : 0;
+    const lab = 250000;
+    const exam = 150000;
+    const gross = tuition + transport + lab + exam;
+
+    let concType = 'NONE';
+    let concPaise = 0;
+    if (s % 7 === 0) {
+      concType = 'SIBLING_CONCESSION_15%';
+      concPaise = Math.round(gross * 0.15);
+    } else if (s % 4 === 0) {
+      concType = 'MERIT_SCHOLARSHIP_10%';
+      concPaise = Math.round(gross * 0.10);
+    }
+
+    const netPayable = gross - concPaise;
+
+    list.push({
+      id: `fee_rec_seed_${s}`,
+      receipt_no: recNo,
+      date: today,
+      time: '11:30 AM',
+      student_id: `ent_std_${(s % 20) + 1}`,
+      admission_no: admNo,
+      student_name: stdName,
+      class_name: cls,
+      section: s % 2 === 0 ? 'A' : 'B',
+      academic_year: '2026-2027',
+      months_paid: ['OCT', 'NOV', 'DEC'],
+      fee_heads: [
+        { name: `Tuition Fee (${cls})`, amount_paise: tuition },
+        { name: 'Transport Bus Facility', amount_paise: transport },
+        { name: 'Computer & AI Lab', amount_paise: lab },
+        { name: 'Term Examination Fee', amount_paise: exam },
+      ],
+      subtotal_paise: gross,
+      concession_type: concType,
+      concession_paise: concPaise,
+      net_amount_paise: netPayable,
+      payment_mode: mode,
+      transaction_ref: mode === 'UPI' ? `UPI-${889900 + s}` : `CHQ-${100000 + s}`,
+      staff_name: 'Sr. Accounts Bursar',
+      remarks: 'Q3 Term Fee Payment Realized',
+    });
+  }
+  return list;
+};
+
+export const INITIAL_PAYMENT_RECORDS: SchoolFeePaymentRecord[] = generateSeeded50SchoolFeePayments();
 
 // ----------------------------------------------------------------------------
 // 6. PERSISTENCE SERVICE KEYS & HELPERS
@@ -706,7 +688,10 @@ export class SchoolDataService {
 
   // --- Fee Payment Records ---
   static getFeePayments(): SchoolFeePaymentRecord[] {
-    return this.load<SchoolFeePaymentRecord[]>(STORAGE_KEYS.PAYMENTS, INITIAL_PAYMENT_RECORDS);
+    const list = this.load<SchoolFeePaymentRecord[]>(STORAGE_KEYS.PAYMENTS, INITIAL_PAYMENT_RECORDS);
+    if (list && list.length >= 50) return list;
+    this.saveFeePayments(INITIAL_PAYMENT_RECORDS);
+    return INITIAL_PAYMENT_RECORDS;
   }
 
   static saveFeePayments(payments: SchoolFeePaymentRecord[]): void {

@@ -11,15 +11,18 @@ import {
 import { StatusChip } from '../components/StatusChip';
 import { CopyButton } from '../components/CopyButton';
 import { Modal } from '../components/Modal';
+import { GithubSyncService } from '../utils/githubService';
 
 interface TenantDetailScreenProps {
   tenantId: string;
   onBack: () => void;
+  onStartLiveSupport?: (tenant: TenantSummary) => void;
 }
 
 export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
   tenantId,
   onBack,
+  onStartLiveSupport,
 }) => {
   const [tenant, setTenant] = useState<TenantSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -279,8 +282,108 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
   const nowMs = Date.now();
   const permitActive = tenant.export_permit_until_ms > nowMs;
 
+  const handleDownloadLicenseJson = () => {
+    if (!tenant) return;
+    const cleanKey = tenant.business_name
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    const d = new Date(tenant.valid_until_day * 86400 * 1000);
+    const isoDate = d.toISOString().split('T')[0];
+    const payload = {
+      version: 1,
+      license_key: cleanKey,
+      tenant_id: tenant.id,
+      business_name: tenant.business_name,
+      gstin: '27AABCR1234D1Z5',
+      vertical: tenant.vertical,
+      plan: tenant.plan,
+      max_counters: tenant.max_counters,
+      valid_until: isoDate,
+      valid_until_day: tenant.valid_until_day,
+      status: tenant.status,
+      support_contact: '+91 98765 43210 • dev@omnibill.com',
+      issued_ms: Date.now(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${cleanKey}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const [isPushingGithub, setIsPushingGithub] = useState(false);
+  const [githubPushMsg, setGithubPushMsg] = useState<{ ok: boolean; text: string; url?: string } | null>(null);
+
+  const handlePushToGithub = async () => {
+    if (!tenant) return;
+    const cleanKey = tenant.business_name
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    const d = new Date(tenant.valid_until_day * 86400 * 1000);
+    const isoDate = d.toISOString().split('T')[0];
+    const payload = {
+      version: 1,
+      license_key: cleanKey,
+      tenant_id: tenant.id,
+      business_name: tenant.business_name,
+      gstin: '27AABCR1234D1Z5',
+      vertical: tenant.vertical,
+      plan: tenant.plan,
+      max_counters: tenant.max_counters,
+      valid_until: isoDate,
+      valid_until_day: tenant.valid_until_day,
+      status: tenant.status,
+      support_contact: '+91 98765 43210 • dev@omnibill.com',
+      issued_ms: Date.now(),
+    };
+
+    setIsPushingGithub(true);
+    setGithubPushMsg(null);
+    try {
+      const res = await GithubSyncService.pushLicense(cleanKey, payload);
+      if (res.ok) {
+        setGithubPushMsg({
+          ok: true,
+          text: `Successfully published to GitHub: licenses/${cleanKey}.json`,
+          url: res.fileUrl,
+        });
+      } else {
+        setGithubPushMsg({
+          ok: false,
+          text: res.message,
+        });
+      }
+    } finally {
+      setIsPushingGithub(false);
+      setTimeout(() => setGithubPushMsg(null), 8000);
+    }
+  };
+
   return (
     <div className="space-y-8">
+      {githubPushMsg && (
+        <div
+          className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-between ${
+            githubPushMsg.ok
+              ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+              : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+          }`}
+        >
+          <span>{githubPushMsg.text}</span>
+          {githubPushMsg.url && (
+            <a href={githubPushMsg.url} target="_blank" rel="noreferrer" className="underline font-bold text-white">
+              View on GitHub ↗
+            </a>
+          )}
+        </div>
+      )}
+
       {/* Top Breadcrumb & Title */}
       <div>
         <button
@@ -316,6 +419,17 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
 
           {/* Quick Actions */}
           <div className="flex flex-wrap items-center gap-2">
+            {onStartLiveSupport && (
+              <button
+                onClick={() => onStartLiveSupport(tenant)}
+                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium shadow-sm transition-colors flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <svg className="w-4 h-4 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 18v-6a9 9 0 0118 0v6M3 18a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v3zm18 0a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h2v3z" />
+                </svg>
+                <span>Start Live Support</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 setMarkPaidError(null);
@@ -327,6 +441,21 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
               Mark Paid
+            </button>
+            <button
+              onClick={handleDownloadLicenseJson}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-bold shadow-md shadow-blue-600/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Download client license.json for GitHub or offline import"
+            >
+              <span>📥 Download License JSON</span>
+            </button>
+            <button
+              onClick={handlePushToGithub}
+              disabled={isPushingGithub}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-sm font-bold shadow-md shadow-indigo-600/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Publish or update this license directly to GitHub repository"
+            >
+              <span>{isPushingGithub ? 'Pushing to GitHub...' : '🚀 Push to GitHub'}</span>
             </button>
             <button
               onClick={handleToggleSuspend}

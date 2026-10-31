@@ -34,6 +34,7 @@ export const ItemMaster: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedTaxRate, setSelectedTaxRate] = useState<string>('ALL');
   const [stockFilter, setStockFilter] = useState<'ALL' | 'LOW' | 'IN_STOCK' | 'NEAR_EXPIRY'>('ALL');
+  const [showArchived, setShowArchived] = useState(false);
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
 
   // Sorting
@@ -48,6 +49,7 @@ export const ItemMaster: React.FC = () => {
   // Form states - Add Item
   const [itemForm, setItemForm] = useState({
     sku: '',
+    barcode: '',
     name: '',
     hsn_sac: '',
     tax_rate_bps: 1800,
@@ -80,6 +82,9 @@ export const ItemMaster: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    const handleSync = () => loadData();
+    window.addEventListener('omnibill_catalog_sync', handleSync);
+    return () => window.removeEventListener('omnibill_catalog_sync', handleSync);
   }, []);
 
   // Keyboard shortcut listener: Alt+N for New Item, Alt+L for New Lot
@@ -133,6 +138,7 @@ export const ItemMaster: React.FC = () => {
         (i) =>
           i.name.toLowerCase().includes(q) ||
           i.sku.toLowerCase().includes(q) ||
+          (i.barcode && i.barcode.toLowerCase().includes(q)) ||
           i.hsn_sac.includes(q) ||
           i.category.toLowerCase().includes(q) ||
           i.lots.some((lot) => lot.batch_number.toLowerCase().includes(q))
@@ -162,6 +168,12 @@ export const ItemMaster: React.FC = () => {
       result = result.filter((i) => i.lots.some((l) => isLotNearExpiry(l.expiry_date)));
     }
 
+    if (!showArchived) {
+      result = result.filter((i) => !(i as any).is_archived);
+    } else {
+      result = result.filter((i) => !!(i as any).is_archived);
+    }
+
     result.sort((a, b) => {
       let cmp = 0;
       if (sortField === 'name') cmp = a.name.localeCompare(b.name);
@@ -187,13 +199,28 @@ export const ItemMaster: React.FC = () => {
     }
   };
 
+  const handleToggleArchiveItem = (item: ResourceItem) => {
+    const isCurrentlyArchived = !!(item as any).is_archived;
+    const updated = items.map((i) => {
+      if (i.id === item.id) {
+        return { ...i, is_archived: !isCurrentlyArchived };
+      }
+      return i;
+    });
+    ErpStorageService.saveItems(updated);
+    setItems(updated);
+  };
+
   // Add Item Submit
   const handleAddItemSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!itemForm.sku.trim() || !itemForm.name.trim() || !itemForm.hsn_sac.trim()) {
-      alert('Please fill in SKU, Item Name, and HSN/SAC code.');
+    const derivedName = itemForm.name.trim();
+    if (!derivedName) {
+      alert('Please fill in Item Name.');
       return;
     }
+    const derivedSku = itemForm.sku.trim() || itemForm.barcode.trim() || `SKU-${Date.now().toString().slice(-6)}`;
+    const derivedHsn = itemForm.hsn_sac.trim() || '9999';
 
     const basePricePaise = Math.round(parseFloat(itemForm.base_price_inr || '0') * 100);
     const costPricePaise = Math.round(parseFloat(itemForm.cost_price_inr || '0') * 100);
@@ -201,14 +228,15 @@ export const ItemMaster: React.FC = () => {
     const mrpPaise = itemForm.mrp_inr ? Math.round(parseFloat(itemForm.mrp_inr) * 100) : Math.round(basePricePaise * 1.15);
 
     ErpStorageService.addItem({
-      sku: itemForm.sku,
-      name: itemForm.name,
-      hsn_sac: itemForm.hsn_sac,
+      sku: derivedSku,
+      barcode: itemForm.barcode || derivedSku,
+      name: derivedName,
+      hsn_sac: derivedHsn,
       tax_rate_bps: Number(itemForm.tax_rate_bps),
       base_price_paise: basePricePaise,
       cost_price_paise: costPricePaise,
-      unit: itemForm.unit,
-      category: itemForm.category,
+      unit: itemForm.unit || 'PCS',
+      category: itemForm.category || 'General',
       is_stock_tracked: true,
       reorder_level_milli: Math.round(parseFloat(itemForm.reorder_level || '10') * 1000),
       initial_stock_milli: initialQty > 0 ? Math.round(initialQty * 1000) : 0,
@@ -219,8 +247,12 @@ export const ItemMaster: React.FC = () => {
 
     loadData();
     setIsAddItemOpen(false);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('omnibill_catalog_sync'));
+    }
     setItemForm({
       sku: '',
+      barcode: '',
       name: '',
       hsn_sac: '',
       tax_rate_bps: 1800,
@@ -487,16 +519,24 @@ export const ItemMaster: React.FC = () => {
             >
               Near Expiry
             </button>
+            <button
+              onClick={() => setShowArchived((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-md transition-colors ${
+                showArchived ? 'bg-purple-600 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {showArchived ? 'Viewing Archived' : 'Archived'}
+            </button>
           </div>
         </div>
       </div>
 
       {/* Main Items Table */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
-        <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-900/60 shadow-xl">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 bg-slate-900/90 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4">
+        <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-900/60 shadow-xl">
+          <table className="w-full text-left border-collapse min-w-[850px]">
+            <thead className="sticky top-0 bg-slate-900 z-10 shadow-sm">
+              <tr className="border-b border-slate-800 bg-slate-900 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none">
                 <th className="py-3 px-4 w-10"></th>
                 <th
                   onClick={() => toggleSort('sku')}
@@ -575,12 +615,17 @@ export const ItemMaster: React.FC = () => {
                           )}
                         </td>
 
-                        {/* SKU */}
+                        {/* SKU & Barcode */}
                         <td className="py-3 px-4 font-mono font-semibold text-slate-200">
                           <div className="flex items-center space-x-1.5">
                             <Barcode className="w-3.5 h-3.5 text-slate-500" />
                             <span>{item.sku}</span>
                           </div>
+                          {item.barcode && item.barcode !== item.sku && (
+                            <div className="text-[10px] text-emerald-400 font-mono tracking-wider pl-5">
+                              {item.barcode}
+                            </div>
+                          )}
                         </td>
 
                         {/* Item Name */}
@@ -659,6 +704,17 @@ export const ItemMaster: React.FC = () => {
                             title="Add Lot / Batch"
                           >
                             + Lot
+                          </button>
+                          <button
+                            onClick={() => handleToggleArchiveItem(item)}
+                            className={`ml-2 px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors ${
+                              (item as any).is_archived
+                                ? 'bg-amber-950/40 text-amber-300 border-amber-600/40 hover:bg-amber-900/40'
+                                : 'bg-slate-800 text-slate-400 hover:text-rose-300 border-slate-700'
+                            }`}
+                            title={(item as any).is_archived ? 'Restore / Unarchive Item' : 'Archive / Deactivate Item'}
+                          >
+                            {(item as any).is_archived ? 'Restore' : 'Archive'}
                           </button>
                         </td>
                       </tr>
@@ -775,7 +831,7 @@ export const ItemMaster: React.FC = () => {
         width="max-w-2xl"
       >
         <form onSubmit={handleAddItemSubmit} className="space-y-4 text-xs select-none">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* SKU / Code */}
             <div>
               <label className="block text-slate-400 font-medium mb-1">
@@ -784,9 +840,23 @@ export const ItemMaster: React.FC = () => {
               <input
                 type="text"
                 required
-                placeholder="e.g. MED-PARACET-500"
+                placeholder="e.g. MILK-500"
                 value={itemForm.sku}
                 onChange={(e) => setItemForm({ ...itemForm, sku: e.target.value.toUpperCase() })}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Barcode */}
+            <div>
+              <label className="block text-slate-400 font-medium mb-1">
+                Barcode (EAN-13 / Scanner)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. 8901262010053"
+                value={itemForm.barcode}
+                onChange={(e) => setItemForm({ ...itemForm, barcode: e.target.value.trim() })}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -799,7 +869,7 @@ export const ItemMaster: React.FC = () => {
               <input
                 type="text"
                 required
-                placeholder="e.g. 3004 or 8504"
+                placeholder="e.g. 0401 or 1905"
                 value={itemForm.hsn_sac}
                 onChange={(e) => setItemForm({ ...itemForm, hsn_sac: e.target.value })}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono focus:outline-none focus:border-blue-500"
@@ -807,14 +877,14 @@ export const ItemMaster: React.FC = () => {
             </div>
 
             {/* Name */}
-            <div className="md:col-span-2">
+            <div className="md:col-span-3">
               <label className="block text-slate-400 font-medium mb-1">
                 Item Full Name / Description <span className="text-rose-400">*</span>
               </label>
               <input
                 type="text"
                 required
-                placeholder="e.g. Paracetamol 500mg Tablets (Strip of 10)"
+                placeholder="e.g. Amul Taaza Fresh Toned Milk 500ml Pouch"
                 value={itemForm.name}
                 onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500"

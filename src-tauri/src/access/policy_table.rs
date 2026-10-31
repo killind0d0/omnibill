@@ -579,6 +579,26 @@ pub static COMMAND_POLICY: &[CommandPolicy] = &[
         public: false,
         lan_allowed: false,
     },
+    CommandPolicy {
+        name: "cmd_backup_list",
+        permission: Some(Permission::BackupRestore),
+        feature: Some(Feature::Backup),
+        write: false,
+        export: false,
+        print: false,
+        public: false,
+        lan_allowed: false,
+    },
+    CommandPolicy {
+        name: "cmd_backup_health",
+        permission: None,
+        feature: None,
+        write: false,
+        export: false,
+        print: false,
+        public: true,
+        lan_allowed: false,
+    },
     // --- Printing Surfaces (L0 Answer 7) ---
     CommandPolicy {
         name: "cmd_print_receipt",

@@ -74,6 +74,7 @@ import {
   generatePatientBillWhatsAppLink,
 } from './hospitalData';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { paiseToWords } from '../lib/numbersToWords';
 import { posSound } from '../lib/sound';
 
 export type HospitalTab = 'BILLING' | 'PATIENTS' | 'DOCTOR_BED_RULES' | 'PHARMACY_STOCK' | 'EXPENSES' | 'REPORTS' | 'RECEIPT_SETTINGS';
@@ -217,6 +218,13 @@ export const HospitalBilling: React.FC = () => {
         if (res[2]) addItemToClinicalBill(res[2], '1-0-1 After Food (5 Days)');
       }
     });
+
+    const handleSync = () => {
+      setMedStock(HospitalDataService.getMedicalStock());
+      VerticalIPCBridge.getResources('HOSPITAL').then(setCatalog);
+    };
+    window.addEventListener('omnibill_catalog_sync', handleSync);
+    return () => window.removeEventListener('omnibill_catalog_sync', handleSync);
   }, []);
 
   // Currently Selected Patient
@@ -751,7 +759,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 1: CLINICAL BILLING (OPD / IPD / DIAGNOSTICS / PHARMACY)
       --------------------------------------------------------------------- */}
       {activeTab === 'BILLING' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* TWO-WAY SMART PATIENT IDENTIFICATION CARD */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -871,7 +879,7 @@ export const HospitalBilling: React.FC = () => {
                       (selectedPatient.dues_balance_paise || 0) > 0 ? 'text-rose-400' : 'text-emerald-400'
                     }`}
                   >
-                    ₹{formatPaise(selectedPatient.dues_balance_paise || 0)}
+                    {formatPaise(selectedPatient.dues_balance_paise || 0)}
                   </span>
                 </div>
               </div>
@@ -1216,7 +1224,7 @@ export const HospitalBilling: React.FC = () => {
                         <span>Include Outstanding Arrears in this Bill</span>
                       </label>
                       <span className="font-mono text-rose-400 font-bold text-xs">
-                        +₹{formatPaise(selectedPatient.dues_balance_paise || 0)}
+                        +{formatPaise(selectedPatient.dues_balance_paise || 0)}
                       </span>
                     </div>
                   )}
@@ -1228,27 +1236,27 @@ export const HospitalBilling: React.FC = () => {
                 <div className="space-y-1.5 text-xs border-b border-slate-800 pb-3">
                   <div className="flex justify-between text-slate-400">
                     <span>Clinical Services Subtotal:</span>
-                    <span className="font-mono text-white">₹{formatPaise(subtotalPaise)}</span>
+                    <span className="font-mono text-white">{formatPaise(subtotalPaise)}</span>
                   </div>
 
                   {calculatedConcessionPaise > 0 && (
                     <div className="flex justify-between text-rose-400 font-semibold">
                       <span>Concession ({concessionReason}):</span>
-                      <span className="font-mono">-₹{formatPaise(calculatedConcessionPaise)}</span>
+                      <span className="font-mono">-{formatPaise(calculatedConcessionPaise)}</span>
                     </div>
                   )}
 
                   {previousDuesPaise > 0 && (
                     <div className="flex justify-between text-amber-400 font-semibold">
                       <span>Carried Forward Dues:</span>
-                      <span className="font-mono">+₹{formatPaise(previousDuesPaise)}</span>
+                      <span className="font-mono">+{formatPaise(previousDuesPaise)}</span>
                     </div>
                   )}
 
                   <div className="flex justify-between items-center text-base font-extrabold text-white pt-2 border-t border-slate-800">
                     <span>Net Amount Payable:</span>
                     <span className="text-xl font-mono text-rose-400">
-                      ₹{formatPaise(finalNetPayablePaise)}
+                      {formatPaise(finalNetPayablePaise)}
                     </span>
                   </div>
                 </div>
@@ -1291,7 +1299,7 @@ export const HospitalBilling: React.FC = () => {
                   className="w-full py-3 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 disabled:opacity-40 text-white rounded-xl text-sm font-bold flex items-center justify-center space-x-2 transition cursor-pointer shadow-lg shadow-rose-600/30"
                 >
                   <Receipt className="w-4 h-4" />
-                  <span>Generate Medical Bill & Post to Ledger (₹{formatPaise(finalNetPayablePaise)})</span>
+                  <span>Generate Medical Bill & Post to Ledger ({formatPaise(finalNetPayablePaise)})</span>
                 </button>
               </div>
             </div>
@@ -1303,7 +1311,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 2: PATIENTS DIRECTORY & DUES MANAGEMENT
       --------------------------------------------------------------------- */}
       {activeTab === 'PATIENTS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div>
@@ -1427,7 +1435,7 @@ export const HospitalBilling: React.FC = () => {
                       </td>
                       <td className="p-3 text-right font-mono font-bold">
                         <span className={(p.dues_balance_paise || 0) > 0 ? 'text-rose-400' : 'text-emerald-400'}>
-                          ₹{formatPaise(p.dues_balance_paise || 0)}
+                          {formatPaise(p.dues_balance_paise || 0)}
                         </span>
                       </td>
                       <td className="p-3 text-center">
@@ -1454,7 +1462,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 3: DOCTOR & BED RATE MASTER CUSTOMIZER
       --------------------------------------------------------------------- */}
       {activeTab === 'DOCTOR_BED_RULES' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* DOCTOR CONSULTATION MATRIX */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -1617,7 +1625,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 3.5: HOSPITAL PHARMACY & MEDICAL SUPPLIES STOCK INWARD
       --------------------------------------------------------------------- */}
       {activeTab === 'PHARMACY_STOCK' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* Key Financial Metric Tiles (Purchases vs Patient Billing) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-sm">
@@ -1626,7 +1634,7 @@ export const HospitalBilling: React.FC = () => {
                 <Receipt className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-xl font-black text-emerald-400 font-mono mt-1">
-                ₹{formatPaise(paymentRecords.reduce((s, p) => s + p.net_paid_paise, 0))}
+                {formatPaise(paymentRecords.reduce((s, p) => s + p.net_paid_paise, 0))}
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5">
                 {paymentRecords.length} clinical patient receipts
@@ -1639,7 +1647,7 @@ export const HospitalBilling: React.FC = () => {
                 <Truck className="w-4 h-4 text-rose-400" />
               </div>
               <div className="text-xl font-black text-rose-400 font-mono mt-1">
-                ₹{formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
+                {formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
               </div>
               <div className="text-[10px] text-slate-500 mt-0.5">
                 {stockVouchers.length} inward expense vouchers recorded
@@ -1657,7 +1665,7 @@ export const HospitalBilling: React.FC = () => {
                 const diff = totalSold - totalPur;
                 return (
                   <div className={`text-xl font-black font-mono mt-1 ${diff >= 0 ? 'text-blue-400' : 'text-amber-400'}`}>
-                    ₹{formatPaise(Math.abs(diff))} {diff < 0 && '(Deficit)'}
+                    {formatPaise(Math.abs(diff))} {diff < 0 && '(Deficit)'}
                   </div>
                 );
               })()}
@@ -1771,10 +1779,10 @@ export const HospitalBilling: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono text-slate-300">
-                            ₹{formatPaise(item.cost_price_paise)}
+                            {formatPaise(item.cost_price_paise)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-400">
-                            ₹{formatPaise(item.billing_rate_paise)}
+                            {formatPaise(item.billing_rate_paise)}
                           </td>
                         </tr>
                       );
@@ -1959,10 +1967,10 @@ export const HospitalBilling: React.FC = () => {
                                 {l.quantity.toLocaleString('en-IN')} units
                               </td>
                               <td className="py-2 px-3 text-right font-mono text-slate-300">
-                                ₹{formatPaise(l.costPricePaise)}
+                                {formatPaise(l.costPricePaise)}
                               </td>
                               <td className="py-2 px-3 text-right font-mono font-bold text-emerald-400">
-                                ₹{formatPaise(lineTotal)}
+                                {formatPaise(lineTotal)}
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <button
@@ -1986,7 +1994,7 @@ export const HospitalBilling: React.FC = () => {
                   <div>
                     <span className="text-xs text-slate-400 mr-2">Total Inward Purchase Expense:</span>
                     <span className="text-xl font-black font-mono text-emerald-400">
-                      ₹{formatPaise(inwardLines.reduce((s, l) => s + l.quantity * l.costPricePaise, 0))}
+                      {formatPaise(inwardLines.reduce((s, l) => s + l.quantity * l.costPricePaise, 0))}
                     </span>
                   </div>
 
@@ -2045,7 +2053,7 @@ export const HospitalBilling: React.FC = () => {
                 <div className="text-right">
                   <span className="text-xs text-slate-400">Total Inward Outflow:</span>
                   <span className="text-base font-bold text-emerald-400 font-mono ml-2">
-                    ₹{formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
+                    {formatPaise(stockVouchers.reduce((s, v) => s + v.totalExpensePaise, 0))}
                   </span>
                 </div>
               </div>
@@ -2057,7 +2065,7 @@ export const HospitalBilling: React.FC = () => {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase text-[10px]">
+                    <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase text-[10px] sticky top-0 z-10">
                       <tr>
                         <th className="py-2.5 px-3">Voucher #</th>
                         <th className="py-2.5 px-3">Date</th>
@@ -2081,7 +2089,7 @@ export const HospitalBilling: React.FC = () => {
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">
-                            ₹{formatPaise(v.totalExpensePaise)}
+                            {formatPaise(v.totalExpensePaise)}
                           </td>
                           <td className="py-2.5 px-3 text-center">
                             <button
@@ -2111,7 +2119,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 4: HOSPITAL EXPENSES & VOUCHER TRACKER
       --------------------------------------------------------------------- */}
       {activeTab === 'EXPENSES' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* RECORD EXPENSE FORM */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
@@ -2266,7 +2274,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 5: REVENUE ANALYTICS & AUDIT REPORTS
       --------------------------------------------------------------------- */}
       {activeTab === 'REPORTS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           {/* STATS OVERVIEW CARDS */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
@@ -2274,7 +2282,7 @@ export const HospitalBilling: React.FC = () => {
                 Total Medical Collections
               </span>
               <div className="text-2xl font-black font-mono text-rose-400 mt-1">
-                ₹{formatPaise(paymentRecords.reduce((acc, p) => acc + p.net_paid_paise, 0))}
+                {formatPaise(paymentRecords.reduce((acc, p) => acc + p.net_paid_paise, 0))}
               </div>
               <span className="text-[10px] text-slate-500 mt-1 block">
                 Across {paymentRecords.length} posted invoices
@@ -2286,7 +2294,7 @@ export const HospitalBilling: React.FC = () => {
                 Outstanding Patient Arrears
               </span>
               <div className="text-2xl font-black font-mono text-amber-400 mt-1">
-                ₹{formatPaise(patients.reduce((acc, p) => acc + (p.dues_balance_paise || 0), 0))}
+                {formatPaise(patients.reduce((acc, p) => acc + (p.dues_balance_paise || 0), 0))}
               </div>
               <span className="text-[10px] text-slate-500 mt-1 block">Pending recovery from {patients.filter(p => (p.dues_balance_paise || 0) > 0).length} patients</span>
             </div>
@@ -2296,7 +2304,7 @@ export const HospitalBilling: React.FC = () => {
                 Operational Expenses
               </span>
               <div className="text-2xl font-black font-mono text-purple-400 mt-1">
-                ₹{formatPaise(expenses.reduce((acc, e) => acc + e.amount_paise, 0))}
+                {formatPaise(expenses.reduce((acc, e) => acc + e.amount_paise, 0))}
               </div>
               <span className="text-[10px] text-slate-500 mt-1 block">Medical oxygen, bio-waste, surgicals</span>
             </div>
@@ -2417,7 +2425,7 @@ export const HospitalBilling: React.FC = () => {
           TAB 6: RECEIPT CUSTOMIZER & LIVE WATERMARK PREVIEW
       --------------------------------------------------------------------- */}
       {activeTab === 'RECEIPT_SETTINGS' && (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* SETTINGS FORM */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
@@ -2949,7 +2957,7 @@ export const HospitalBilling: React.FC = () => {
                   {lastReceipt.lines.map((l) => (
                     <div key={l.id} className="flex justify-between text-slate-800">
                       <span>{l.name}</span>
-                      <span className="font-mono">₹{formatPaise(l.line_total_paise)}</span>
+                      <span className="font-mono">{formatPaise(l.line_total_paise)}</span>
                     </div>
                   ))}
                 </div>
@@ -2957,8 +2965,13 @@ export const HospitalBilling: React.FC = () => {
                 <div className="border-t border-slate-200 pt-2 flex justify-between font-black text-sm">
                   <span>Net Amount Paid:</span>
                   <span className="text-rose-700 font-mono">
-                    ₹{formatPaise(lastReceipt.totals.total_amount_paise)}
+                    {formatPaise(lastReceipt.totals.total_amount_paise)}
                   </span>
+                </div>
+
+                {/* Amount in Words */}
+                <div className="text-[10px] text-slate-600 italic pt-1 leading-snug">
+                  <span className="font-semibold not-italic">Amount in Words:</span> {paiseToWords(lastReceipt.totals.total_amount_paise)}
                 </div>
               </div>
             </div>
@@ -2966,6 +2979,7 @@ export const HospitalBilling: React.FC = () => {
             {/* ACTION DISPATCH CONTROLS */}
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => window.print()}
                 className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition cursor-pointer"
               >
@@ -2994,12 +3008,17 @@ export const HospitalBilling: React.FC = () => {
 
       {/* MODAL: Add New Clinical Item / Medicine to Hospital Master */}
       {isNewMedItemModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl animate-in zoom-in-95">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4 animate-in fade-in duration-150">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 space-y-4 shadow-2xl animate-in zoom-in-95"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clinical-drug-title"
+          >
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 <Pill className="w-5 h-5 text-rose-400" />
-                <h3 className="text-sm font-bold text-white">Add New Clinical Drug / Consumable</h3>
+                <h3 id="clinical-drug-title" className="text-sm font-bold text-white">Add New Clinical Drug / Consumable</h3>
               </div>
               <button
                 onClick={() => setIsNewMedItemModalOpen(false)}

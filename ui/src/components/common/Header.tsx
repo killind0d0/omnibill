@@ -11,6 +11,7 @@ import {
   Tag,
   PauseCircle,
   PlayCircle,
+  Headset,
 } from 'lucide-react';
 import { BusinessProfile } from '../../types/pos';
 
@@ -28,6 +29,8 @@ interface HeaderProps {
   onHoldBill?: () => void;
   onRecallBills?: () => void;
   heldBillsCount?: number;
+  onOpenLiveSupport?: () => void;
+  onOpenStoreProfile?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -44,79 +47,84 @@ export const Header: React.FC<HeaderProps> = ({
   onHoldBill,
   onRecallBills,
   heldBillsCount = 0,
+  onOpenLiveSupport,
+  onOpenStoreProfile,
 }) => {
   return (
-    <header className="h-16 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between select-none shadow-md">
+    <header className="h-12 bg-slate-900 border-b border-slate-800 px-3.5 flex items-center justify-between select-none shadow-md shrink-0">
       {/* Brand & Store Name */}
-      <div className="flex items-center space-x-3.5">
-        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/20">
-          <Zap className="w-5 h-5 fill-current" />
+      <div className="flex items-center space-x-2.5">
+        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-md shadow-blue-500/20">
+          <Zap className="w-3.5 h-3.5 fill-current" />
         </div>
         <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-1.5">
-              <span>OmniBill</span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30 font-semibold tracking-wider uppercase">
-                Lightning POS
+          <button
+            type="button"
+            onClick={onOpenStoreProfile}
+            className="flex items-center space-x-1.5 hover:bg-slate-800/80 px-1.5 py-0.5 rounded cursor-pointer transition text-left"
+            title="Click to configure Store Profile & GSTIN Settings"
+          >
+            <h1 className="text-xs font-bold tracking-tight text-white flex items-center gap-1">
+              <span>{business.trade_name || 'OmniBill Store'}</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30 font-semibold tracking-wider uppercase">
+                POS
               </span>
             </h1>
-          </div>
-          <div className="flex items-center space-x-2 text-xs text-slate-400">
-            <Building2 className="w-3 h-3 text-slate-500" />
-            <span className="truncate max-w-[220px]" title={business.legal_name}>
-              {business.trade_name || business.legal_name}
-            </span>
             <span className="text-slate-600">•</span>
-            <span className="text-emerald-400 font-mono text-[11px]">GST: {business.gstin}</span>
-          </div>
+            <span className="text-emerald-400 font-mono text-[10px]">GST: {business.gstin}</span>
+          </button>
         </div>
       </div>
 
       {/* Mode Switcher Tabs */}
-      <div className="flex items-center bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+      <div className="flex items-center bg-slate-950/80 p-0.5 rounded-lg border border-slate-800">
         <button
+          type="button"
           onClick={() => onModeChange('SALES')}
-          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition-all focus-ring ${
             activeMode === 'SALES'
-              ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/40'
+              ? 'bg-blue-600 text-white shadow-xs'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
           }`}
         >
-          <ShoppingCart className="w-3.5 h-3.5" />
+          <ShoppingCart className="w-3 h-3" />
           <span>Sales Invoicing</span>
-          <kbd className={`text-[10px] px-1.5 py-0.5 rounded ${activeMode === 'SALES' ? 'bg-blue-700/80 text-blue-100' : 'bg-slate-800 text-slate-400'}`}>
+          <kbd className={`text-[10px] px-1 py-0.2 rounded font-mono ${activeMode === 'SALES' ? 'bg-blue-700/80 text-blue-100' : 'bg-slate-800 text-slate-400'}`}>
             F8
           </kbd>
         </button>
 
         <button
+          type="button"
           onClick={() => onModeChange('PURCHASES')}
-          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition-all focus-ring ${
             activeMode === 'PURCHASES'
-              ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/40'
+              ? 'bg-emerald-600 text-white shadow-xs'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
           }`}
         >
-          <Truck className="w-3.5 h-3.5" />
+          <Truck className="w-3 h-3" />
           <span>Purchases Entry</span>
-          <kbd className={`text-[10px] px-1.5 py-0.5 rounded ${activeMode === 'PURCHASES' ? 'bg-emerald-700/80 text-emerald-100' : 'bg-slate-800 text-slate-400'}`}>
+          <kbd className={`text-[10px] px-1 py-0.2 rounded font-mono ${activeMode === 'PURCHASES' ? 'bg-emerald-700/80 text-emerald-100' : 'bg-slate-800 text-slate-400'}`}>
             F9
           </kbd>
         </button>
       </div>
 
       {/* Navigation Shortcut Actions */}
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center space-x-1.5">
         {/* Price & Stock Check (F5) */}
         {onPriceCheck && (
           <button
+            type="button"
             onClick={onPriceCheck}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/60 text-cyan-300 text-xs font-medium transition-colors cursor-pointer"
+            aria-label="Price and stock check (F5)"
+            className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/60 text-cyan-300 text-xs font-medium transition-colors cursor-pointer focus-ring"
             title="Price & Stock Check (F5)"
           >
-            <Tag className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">Price Check</span>
-            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+            <Tag className="w-3 h-3 text-cyan-400" />
+            <span className="hidden sm:inline">Price</span>
+            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
               F5
             </kbd>
           </button>
@@ -125,18 +133,20 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Hold Bill (F6) */}
         {onHoldBill && (
           <button
+            type="button"
             onClick={onHoldBill}
             disabled={cartCount === 0}
-            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            aria-label="Hold or suspend current bill (F6)"
+            className={`flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors focus-ring ${
               cartCount > 0
                 ? 'bg-amber-950/40 hover:bg-amber-900/50 border border-amber-800/60 text-amber-300 cursor-pointer'
                 : 'bg-slate-800/30 text-slate-500 border border-slate-800 cursor-not-allowed'
             }`}
             title="Hold / Suspend Current Bill (F6)"
           >
-            <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+            <PauseCircle className="w-3 h-3 text-amber-400" />
             <span className="hidden sm:inline">Hold</span>
-            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
               F6
             </kbd>
           </button>
@@ -145,22 +155,24 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Recall Bills (F7) with Count Badge */}
         {onRecallBills && (
           <button
+            type="button"
             onClick={onRecallBills}
-            className={`relative flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+            aria-label={`Recall suspended bills (${heldBillsCount} held)`}
+            className={`relative flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer focus-ring ${
               heldBillsCount > 0
                 ? 'bg-purple-950/60 hover:bg-purple-900/60 border border-purple-700/70 text-purple-200'
                 : 'bg-slate-800/50 hover:bg-slate-800 border border-slate-700/60 text-slate-300'
             }`}
             title="Recall Suspended / Parked Bills (F7)"
           >
-            <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
+            <PlayCircle className="w-3 h-3 text-purple-400" />
             <span className="hidden sm:inline">Recall</span>
             {heldBillsCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-purple-500 text-white font-mono text-[10px] font-bold">
+              <span className="px-1 py-0.2 rounded-full bg-purple-500 text-white font-mono text-[9px] font-bold">
                 {heldBillsCount}
               </span>
             )}
-            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+            <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
               F7
             </kbd>
           </button>
@@ -168,61 +180,83 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Business Date Pill */}
         <button
+          type="button"
           onClick={onOpenDateModal}
-          className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 text-xs font-medium transition-colors"
+          aria-label={`Change business date, currently ${businessDate}`}
+          className="flex items-center space-x-1.5 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 text-xs font-medium transition-colors focus-ring"
           title="Change Business Date (F2)"
         >
-          <Calendar className="w-3.5 h-3.5 text-blue-400" />
-          <span className="font-mono">{businessDate}</span>
-          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+          <Calendar className="w-3 h-3 text-blue-400" />
+          <span className="font-mono text-[11px]">{businessDate}</span>
+          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
             F2
           </kbd>
         </button>
 
         {/* Payment Receipt Quick Modal */}
         <button
+          type="button"
           onClick={onOpenPayment}
           disabled={cartCount === 0}
-          className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+          aria-label="Payment settle modal (F4)"
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all focus-ring ${
             cartCount > 0
               ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/30 cursor-pointer'
               : 'bg-slate-800/40 text-slate-500 border border-slate-800 cursor-not-allowed'
           }`}
           title="Payment Receipt Quick Modal (F4)"
         >
-          <CreditCard className="w-3.5 h-3.5 text-emerald-400" />
+          <CreditCard className="w-3 h-3 text-emerald-400" />
           <span>Pay</span>
-          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
             F4
           </kbd>
         </button>
 
         {/* Save & Print Slip */}
         <button
+          type="button"
           onClick={onOpenSlip}
           disabled={cartCount === 0}
-          className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+          aria-label="Save and print thermal slip (Alt+S)"
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all focus-ring ${
             cartCount > 0
               ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-600/30 cursor-pointer'
               : 'bg-slate-800/40 text-slate-500 border border-slate-800 cursor-not-allowed'
           }`}
           title="Save & Print Thermal Slip (Alt+S)"
         >
-          <Printer className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Thermal Slip</span>
-          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+          <Printer className="w-3 h-3 text-indigo-400" />
+          <span>Slip</span>
+          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
             Alt+S
           </kbd>
         </button>
 
+        {/* Live Support Remote Assistance Button */}
+        {onOpenLiveSupport && (
+          <button
+            type="button"
+            onClick={onOpenLiveSupport}
+            aria-label="Live Support remote assistance"
+            className="flex items-center space-x-1.5 px-2 py-1 rounded-lg bg-sky-950/60 hover:bg-sky-900/60 border border-sky-800/60 text-sky-300 text-xs font-semibold transition-colors cursor-pointer focus-ring"
+            title="Live Remote Assistance (Screen Share with HQ)"
+          >
+            <Headset className="w-3.5 h-3.5 text-sky-400" />
+            <span className="hidden md:inline">Support</span>
+          </button>
+        )}
+
         {/* Help / Cheat Sheet */}
         <button
+          type="button"
           onClick={onOpenHelp}
-          className="flex items-center space-x-1.5 p-2 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 text-slate-400 hover:text-slate-200 text-xs transition-colors"
+          aria-label="Shortcuts Cheat Sheet (F1)"
+          className="flex items-center space-x-1 p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 text-slate-400 hover:text-slate-200 text-xs transition-colors focus-ring"
           title="Shortcuts Cheat Sheet (F1)"
         >
-          <HelpCircle className="w-4 h-4" />
-          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded">
+          <HelpCircle className="w-3.5 h-3.5" />
+          <kbd className="text-[10px] bg-slate-900 border border-slate-700 text-slate-400 px-1 rounded font-mono">
             F1
           </kbd>
         </button>

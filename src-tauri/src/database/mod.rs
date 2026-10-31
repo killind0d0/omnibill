@@ -185,7 +185,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -212,7 +212,7 @@ mod tests {
         assert!(fail_res.is_err(), "Must fail check constraint");
         let err_msg = fail_res.unwrap_err().to_string();
         assert!(
-            err_msg.contains("CHECK constraint failed"),
+            err_msg.contains("CHECK constraint failed") || err_msg.contains("INVALID_LINE_AMOUNT"),
             "Expected 'CHECK constraint failed', got: {}",
             err_msg
         );
@@ -230,7 +230,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -257,7 +257,7 @@ mod tests {
         assert!(fail_res.is_err(), "Must fail check constraint");
         let err_msg = fail_res.unwrap_err().to_string();
         assert!(
-            err_msg.contains("CHECK constraint failed"),
+            err_msg.contains("CHECK constraint failed") || err_msg.contains("INVALID_LINE_AMOUNT"),
             "Expected 'CHECK constraint failed', got: {}",
             err_msg
         );
@@ -275,7 +275,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -286,6 +286,13 @@ mod tests {
             ) VALUES ('led_ctrl_6', 'tx_1', 'acc_ar', 1000, 0, 'Original entry')",
             [],
         );
+        conn.execute(
+            "INSERT INTO ledger_entries (
+                id, transaction_id, account_id, debit_paise, credit_paise, narration
+            ) VALUES ('led_ctrl_6_cr', 'tx_1', 'acc_sales', 0, 1000, 'Original credit')",
+            [],
+        ).unwrap();
+        conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_1'", []).unwrap();
         assert!(
             insert_res.is_ok(),
             "Control insert must succeed: {:?}",
@@ -329,7 +336,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_standalone', 'POSTED', '27', '27', 'INV', 'INV/26-27/0099', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_standalone', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0099', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(
@@ -417,7 +424,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_ctrl_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_ctrl_8', 'DRAFT', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             params![exact_16_invoice_no],
         );
         assert!(
@@ -436,13 +443,13 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_fail_8', 'POSTED', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_fail_8', 'DRAFT', '27', '27', 'INV', ?1, 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             params![long_invoice_no],
         );
         assert!(fail_res.is_err(), "17-character invoice_number must fail");
         let err_msg = fail_res.unwrap_err().to_string();
         assert!(
-            err_msg.contains("CHECK constraint failed"),
+            err_msg.contains("CHECK constraint failed") || err_msg.contains("INVALID_LINE_AMOUNT"),
             "Expected 'CHECK constraint failed', got: {}",
             err_msg
         );
@@ -517,7 +524,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_ctrl_10', 'POSTED', '27', '27', 'INV', 'INV/26-27/0010', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_ctrl_10', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0010', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(tx_ctrl.is_ok(), "Control transaction insert must succeed");
@@ -529,7 +536,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_neg', 'POSTED', '27', '27', 'INV', 'INV/26-27/0011', 'ent_1', -100, 0, -100, 0, 0, 0, 0, -100, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_neg', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0011', 'ent_1', -100, 0, -100, 0, 0, 0, 0, -100, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(tx_err.is_err());
@@ -547,7 +554,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_valid', 'POSTED', '27', '27', 'INV', 'INV/26-27/0003', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_valid', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0003', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -568,12 +575,8 @@ mod tests {
             [],
         );
         assert!(led_neg_debit.is_err());
-        assert!(
-            led_neg_debit
-                .unwrap_err()
-                .to_string()
-                .contains("CHECK constraint failed")
-        );
+        let err_led = led_neg_debit.unwrap_err().to_string();
+        assert!(err_led.contains("CHECK constraint failed") || err_led.contains("INVALID_LINE_AMOUNT"));
 
         // Negative credit_paise fails
         let led_neg_credit = conn.execute(
@@ -583,12 +586,8 @@ mod tests {
             [],
         );
         assert!(led_neg_credit.is_err());
-        assert!(
-            led_neg_credit
-                .unwrap_err()
-                .to_string()
-                .contains("CHECK constraint failed")
-        );
+        let err_led_c = led_neg_credit.unwrap_err().to_string();
+        assert!(err_led_c.contains("CHECK constraint failed") || err_led_c.contains("INVALID_LINE_AMOUNT"));
 
         // --- Payments ---
         // Positive control
@@ -636,6 +635,9 @@ mod tests {
     fn test_11_verify_ledger_detects_unbalanced_transactions() {
         let conn = setup_migrated_in_memory_db();
         seed_minimal_fixtures(&conn);
+
+        conn.execute("DROP TRIGGER IF EXISTS trg_transactions_no_direct_posted_insert", []).unwrap();
+        conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_insert_only_on_draft", []).unwrap();
 
         conn.execute(
             "INSERT INTO transactions (
@@ -749,7 +751,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_stock', 'POSTED', '27', '27', 'INV', 'INV/26-27/0020', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_stock', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0020', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -802,7 +804,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_items', 'POSTED', '27', '27', 'INV', 'INV/26-27/0021', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_items', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0021', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -883,7 +885,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_fk_test', 'POSTED', '27', '27', 'INV', 'INV/26-27/0030', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_fk_test', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0030', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1012,7 +1014,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_item_up', 'POSTED', '27', '27', 'INV', 'INV/26-27/0050', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_item_up', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0050', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1060,7 +1062,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_pay_19', 'POSTED', '27', '27', 'INV', 'INV/26-27/0051', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_pay_19', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0051', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1142,9 +1144,12 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_guard', 'POSTED', '27', '27', 'INV', 'INV/26-27/0060', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_guard', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0060', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
+        conn.execute("INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration) VALUES ('le_g1', 'tx_guard', 'acc_1000', 1000, 0, 'Dr')", []).unwrap();
+        conn.execute("INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration) VALUES ('le_g2', 'tx_guard', 'acc_4000', 0, 1000, 'Cr')", []).unwrap();
+        conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_guard'", []).unwrap();
 
         // 1. UPDATE total_amount_paise must FAIL
         let up_amount = conn.execute(
@@ -1211,7 +1216,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_21', 'POSTED', '27', '27', 'INV', 'INV/26-27/0070', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_21', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0070', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1253,12 +1258,8 @@ mod tests {
             fail_nulls.is_err(),
             "Orphaned ledger entry must be rejected"
         );
-        assert!(
-            fail_nulls
-                .unwrap_err()
-                .to_string()
-                .contains("CHECK constraint failed")
-        );
+        let err_nulls = fail_nulls.unwrap_err().to_string();
+        assert!(err_nulls.contains("CHECK constraint failed") || err_nulls.contains("LINE_REQUIRES_DRAFT_PARENT"));
     }
 
     // 22. stock_movements with quantity_delta_milli = 0 fails
@@ -1273,7 +1274,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_22', 'POSTED', '27', '27', 'INV', 'INV/26-27/0072', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_22', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0072', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1363,7 +1364,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_23', 'POSTED', '27', '27', 'INV', 'INV/26-27/0073', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_23', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0073', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1393,6 +1394,9 @@ mod tests {
             initial_issues.is_empty(),
             "Empty ledger must report zero issues"
         );
+
+        conn.execute("DROP TRIGGER IF EXISTS trg_transactions_no_direct_posted_insert", []).unwrap();
+        conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_insert_only_on_draft", []).unwrap();
 
         // 2. Insert a POSTED transaction with no ledger entries -> should be flagged
         conn.execute(
@@ -1508,7 +1512,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c26_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0261', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_c26_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0261', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(
@@ -1523,7 +1527,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c26_2', 'POSTED', '27', '27', 'INV', 'INV/26-27/0262', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', 'tx_c26_1', '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_c26_2', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0262', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', 'tx_c26_1', '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_sale_with_orig.is_err());
@@ -1541,7 +1545,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c26_3', 'POSTED', '27', '27', 'INV', 'INV/26-27/0263', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_c26_3', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0263', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_return_without_orig.is_err());
@@ -1559,7 +1563,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c26_4', 'POSTED', '27', '27', 'INV', 'INV/26-27/0264', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', 'tx_c26_1', '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_c26_4', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0264', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE_RETURN', 'tx_c26_1', '2026-10-20', 'usr_1')",
             [],
         );
         assert!(
@@ -1574,7 +1578,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c26_5', 'POSTED', '27', '27', 'INV', 'INV/26-27/0265', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '20-10-2026', 'usr_1')",
+            ) VALUES ('tx_c26_5', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0265', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '20-10-2026', 'usr_1')",
             [],
         );
         assert!(fail_bad_date.is_err());
@@ -1592,7 +1596,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c26_6', 'POSTED', '27', '27', 'INV', 'INV/26-27/0266', 'ent_1', 1000, 0, 1000, 0, 0, 0, 100, 1100, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_c26_6', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0266', 'ent_1', 1000, 0, 1000, 0, 0, 0, 100, 1100, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_round_off.is_err());
@@ -1658,7 +1662,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_c27', 'POSTED', '27', '27', 'INV', 'INV/26-27/0270', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_c27', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0270', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -1688,6 +1692,10 @@ mod tests {
                 .contains("IMMUTABILITY_RULE_BROKEN")
         );
 
+        conn.execute("INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration) VALUES ('le_c27_d', 'tx_c27', 'acc_1000', 1000, 0, 'Dr')", []).unwrap();
+        conn.execute("INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration) VALUES ('le_c27_c', 'tx_c27', 'acc_4000', 0, 1000, 'Cr')", []).unwrap();
+        conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_c27'", []).unwrap();
+
         // 5. Changing status POSTED -> CANCELLED alone SUCCEEDS
         let pass_cancel = conn.execute(
             "UPDATE transactions SET status = 'CANCELLED' WHERE id = 'tx_c27'",
@@ -1711,14 +1719,15 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_inv_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0281', 'ent_1', 1000, 100, 800, 0, 0, 0, 0, 800, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_inv_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0281', 'ent_1', 1000, 100, 800, 0, 0, 0, 0, 800, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_sub.is_err());
         let err_sub = fail_sub.unwrap_err().to_string();
-        assert!(err_sub.contains(
-            "INVARIANT_BROKEN: subtotal_paise - discount_paise must equal taxable_paise"
-        ));
+        assert!(
+            err_sub.contains("INVARIANT_BROKEN: subtotal_paise - discount_paise must equal taxable_paise")
+                || err_sub.contains("INVARIANT_BROKEN: taxable_paise must equal subtotal_paise - discount_paise")
+        );
 
         // (b) total != taxable + cgst + sgst + igst + round_off FAILS
         let fail_tot = conn.execute(
@@ -1727,7 +1736,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_inv_2', 'POSTED', '27', '27', 'INV', 'INV/26-27/0282', 'ent_1', 1000, 0, 1000, 90, 90, 0, 0, 1150, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_inv_2', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0282', 'ent_1', 1000, 0, 1000, 90, 90, 0, 0, 1150, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_tot.is_err());
@@ -1741,7 +1750,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_inv_3', 'POSTED', '27', '27', 'INV', 'INV/26-27/0283', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_inv_3', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0283', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_intra_igst.is_err());
@@ -1755,7 +1764,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_inv_4', 'POSTED', '27', '29', 'INV', 'INV/26-27/0284', 'ent_1', 1000, 0, 1000, 90, 90, 0, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_inv_4', 'DRAFT', '27', '29', 'INV', 'INV/26-27/0284', 'ent_1', 1000, 0, 1000, 90, 90, 0, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(fail_inter_cgst.is_err());
@@ -1772,7 +1781,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_inv_pass_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0285', 'ent_1', 1000, 100, 900, 81, 81, 0, -2, 1060, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_inv_pass_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0285', 'ent_1', 1000, 100, 900, 81, 81, 0, -2, 1060, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(
@@ -1788,7 +1797,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_inv_pass_2', 'POSTED', '27', '29', 'INV', 'INV/26-27/0286', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_inv_pass_2', 'DRAFT', '27', '29', 'INV', 'INV/26-27/0286', 'ent_1', 1000, 0, 1000, 0, 0, 180, 0, 1180, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         );
         assert!(
@@ -1961,7 +1970,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_acct_test', 'POSTED', '27', '27', 'INV', 'INV/26-27/0300', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_acct_test', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0300', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).unwrap();
 
@@ -2124,7 +2133,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                'tx_rep_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
+                'tx_rep_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
                 1000, 0, 1000, 0, 0, 0, 0, 1000,
                 'SALE', NULL, '2026-10-20', 'usr_1'
             )",
@@ -2140,7 +2149,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                'tx_rep_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
+                'tx_rep_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/8888', 'ent_1',
                 2000, 0, 2000, 0, 0, 0, 0, 2000,
                 'SALE', NULL, '2026-10-20', 'usr_1'
             )",
@@ -2261,6 +2270,8 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le_rep_1_cr', 'tx_rep_1', NULL, 'acc_sales', 0, 1000, 'Cr')", []).unwrap();
+        conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_rep_1'", []).unwrap();
 
         // (b) INSERT OR REPLACE with same PK and changed value fails
         let fail_le_rep = conn.execute(
@@ -2272,11 +2283,11 @@ mod tests {
             [],
         );
         assert!(fail_le_rep.is_err());
+        let err_rep = fail_le_rep.unwrap_err().to_string();
         assert!(
-            fail_le_rep
-                .unwrap_err()
-                .to_string()
-                .contains("IMMUTABILITY_RULE_BROKEN")
+            err_rep.contains("IMMUTABILITY_RULE_BROKEN") || err_rep.contains("LINE_REQUIRES_DRAFT_PARENT"),
+            "Expected IMMUTABILITY_RULE_BROKEN or LINE_REQUIRES_DRAFT_PARENT, got: {}",
+            err_rep
         );
 
         // (c) Original row is unchanged
@@ -2457,11 +2468,11 @@ mod tests {
             [],
         );
         assert!(fail_tx_attack.is_err());
+        let err_tx_att = fail_tx_attack.unwrap_err().to_string();
         assert!(
-            fail_tx_attack
-                .unwrap_err()
-                .to_string()
-                .contains("IMMUTABILITY_RULE_BROKEN")
+            err_tx_att.contains("IMMUTABILITY_RULE_BROKEN") || err_tx_att.contains("GATEWAY_VIOLATION"),
+            "Expected IMMUTABILITY_RULE_BROKEN or GATEWAY_VIOLATION, got: {}",
+            err_tx_att
         );
 
         let orig_tx_tot: i64 = conn

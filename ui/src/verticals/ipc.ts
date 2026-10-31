@@ -15,8 +15,9 @@ import {
   EWayBillDetails,
 } from './types';
 import { getDbPath } from '../lib/api';
-import { INITIAL_WHOLESALE_CUSTOMERS } from './wholesaleData';
-import { INITIAL_HOSPITAL_PATIENTS } from './hospitalData';
+import { ErpStorageService } from '../lib/erpStorage';
+import { INITIAL_WHOLESALE_CUSTOMERS, WholesaleDataService } from './wholesaleData';
+import { INITIAL_HOSPITAL_PATIENTS, HospitalDataService } from './hospitalData';
 
 // Detect whether running in Tauri desktop runtime
 declare global {
@@ -1098,6 +1099,59 @@ export const VerticalIPCBridge = {
             currentState.customers[idx].current_balance_paise + payload.totals.total_amount_paise,
         };
       }
+    }
+
+    // Deduct inventory stock from ErpStorageService (Lot FIFO & Item Master)
+    try {
+      ErpStorageService.deductStock(
+        payload.lines.map((l) => ({
+          resource_id: l.resource_id,
+          sku: l.sku,
+          quantity_milli: l.quantity_milli,
+        }))
+      );
+    } catch (e) {
+      console.warn('Failed to deduct stock in ErpStorageService:', e);
+    }
+
+    // Deduct stock in wholesale stock roster
+    if (payload.verticalMode === 'WHOLESALE') {
+      try {
+        const wStock = WholesaleDataService.getWholesaleStock();
+        payload.lines.forEach((line) => {
+          const item = wStock.find((s) => s.id === line.resource_id || s.sku === line.sku);
+          if (item) {
+            item.current_stock = Math.max(0, item.current_stock - Math.round(line.quantity_milli / 1000));
+          }
+        });
+        WholesaleDataService.saveWholesaleStock(wStock);
+      } catch (e) {
+        console.warn('Failed to deduct wholesale stock:', e);
+      }
+    }
+
+    // Deduct stock in hospital medical consumables roster
+    if (payload.verticalMode === 'HOSPITAL') {
+      try {
+        const mStock = HospitalDataService.getMedicalStock();
+        payload.lines.forEach((line) => {
+          const item = mStock.find((s) => s.id === line.resource_id || s.item_code === line.sku);
+          if (item) {
+            item.current_stock = Math.max(0, item.current_stock - Math.round(line.quantity_milli / 1000));
+          }
+        });
+        HospitalDataService.saveMedicalStock(mStock);
+      } catch (e) {
+        console.warn('Failed to deduct hospital medical stock:', e);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('omnibill_catalog_sync', {
+          detail: { vertical: payload.verticalMode },
+        })
+      );
     }
 
     // Persist to central history

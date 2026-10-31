@@ -1,6 +1,27 @@
+// ui/src/features/access/LoginScreen.tsx
+// Commercial Single-Store Login Portal for OmniBill ERP
+
 import React, { useState } from 'react';
+import {
+  Lock,
+  User,
+  ShieldCheck,
+  Zap,
+  ArrowRight,
+  Store,
+  Clock,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import { apiLogin } from './clientApi';
 import { AuthenticatedUser } from './types';
+import { posStorage } from '../../lib/api';
+import { DatabaseBackupModal } from '../../components/common/DatabaseBackupModal';
+import {
+  GithubLicenceService,
+  LicenseVerificationResult,
+} from '../licensing/githubLicenceService';
+import { LicenseLockoutScreen } from '../licensing/LicenseLockoutScreen';
 
 interface LoginScreenProps {
   onLoginSuccess: (token: string, user: AuthenticatedUser) => void;
@@ -13,10 +34,41 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onOpenOwnerReset,
   onOpenActivation,
 }) => {
-  const [username, setUsername] = useState('owner');
+  const profile = posStorage.getBusinessProfile();
+  const [username, setUsername] = useState('cashier1');
   const [password, setPassword] = useState('');
+  const [selectedRole, setSelectedRole] = useState<'OWNER' | 'MANAGER' | 'CASHIER'>('CASHIER');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [licenseResult, setLicenseResult] = useState<LicenseVerificationResult | null>(null);
+
+  // Check license on startup
+  React.useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const res = await GithubLicenceService.verifyLicense();
+        if (isMounted) setLicenseResult(res);
+      } catch {
+        if (isMounted) setLicenseResult({ valid: true, isOffline: true });
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  if (licenseResult && !licenseResult.valid) {
+    return (
+      <LicenseLockoutScreen
+        initialResult={licenseResult}
+        onUnlocked={(lic) => {
+          setLicenseResult({ valid: true, isOffline: false, license: lic });
+        }}
+      />
+    );
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,100 +76,194 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setLoading(true);
 
     try {
-      const res = await apiLogin(username, password);
+      const activeVertical = (localStorage.getItem('omnibill_active_vertical') || 'RETAIL').toLowerCase();
+      const res = await apiLogin(username.trim(), password, activeVertical);
+
+      // Populate synchronized counter session
+      const cashierName =
+        selectedRole === 'CASHIER'
+          ? 'Counter Cashier 1'
+          : selectedRole === 'MANAGER'
+          ? 'Store Manager'
+          : 'Store Owner';
+
+      const counterSession = {
+        operatorRole: selectedRole,
+        operatorName: cashierName,
+        counterId: selectedRole === 'CASHIER' ? 'POS-01 (Express)' : 'MAIN-01',
+        loginTime: new Date().toISOString(),
+      };
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('omnibill_counter_session', JSON.stringify(counterSession));
+      }
+
       onLoginSuccess(res.token, res.user);
     } catch (err: any) {
-      setError(err.message || 'Invalid username or password');
+      setError(err.message || 'Login failed. Please check credentials.');
     } finally {
       setLoading(false);
     }
   };
 
+  const licensePayload = licenseResult?.license || GithubLicenceService.getStoredLicense();
+  const validUntilText = licensePayload?.valid_until || 'Active Subscription';
+  const planText = (licensePayload?.plan || 'Pro').toUpperCase();
+  const businessName = licensePayload?.business_name || profile.trade_name || 'OmniBill Retail Store';
+  const displayGstin = licensePayload?.gstin || profile.gstin || '27AABCR1234D1Z5';
+
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="flex items-center justify-center gap-2.5 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20 text-lg">
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 select-none">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md space-y-6">
+        {/* Brand Header */}
+        <div className="text-center space-y-2">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center font-bold text-white shadow-lg shadow-emerald-500/20 text-xl mx-auto">
             OB
           </div>
-          <span className="font-bold text-2xl text-white tracking-tight">OmniBill ERP</span>
-        </div>
-
-        <div className="bg-slate-900 py-8 px-6 shadow-2xl rounded-2xl sm:px-10 border border-slate-800">
-          <div className="mb-6">
-            <h2 className="text-xl font-bold text-white tracking-tight">Terminal Sign In</h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Authenticate using your POS operator or owner credentials.
+          <div>
+            <h1 className="text-2xl font-black text-white tracking-tight">
+              {businessName}
+            </h1>
+            <p className="text-xs text-slate-400 font-mono mt-0.5">
+              GSTIN: {displayGstin} • {profile.city || 'Counter MAIN-01'}
             </p>
           </div>
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-400 font-semibold">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>{planText} Plan • Verified (Until {validUntilText})</span>
+          </div>
+        </div>
 
+        {/* Login Form Card */}
+        <div className="bg-slate-900 py-6 px-6 shadow-2xl rounded-3xl border border-slate-800 space-y-5">
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Staff Role Selector */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Username
+              <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                Staff Profile
               </label>
-              <input
-                type="text"
-                required
-                autoFocus
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500"
-              />
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { role: 'OWNER', label: 'Owner / Admin', desc: 'Full System' },
+                  { role: 'MANAGER', label: 'Manager', desc: 'Masters & Logs' },
+                  { role: 'CASHIER', label: 'Cashier', desc: 'POS Counter' },
+                ].map((item) => (
+                  <button
+                    key={item.role}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRole(item.role as any);
+                      if (item.role === 'CASHIER') {
+                        setUsername('cashier1');
+                        setPassword('Cashier@OmniBill2026!');
+                      } else if (item.role === 'MANAGER') {
+                        setUsername('manager');
+                        setPassword('Manager@OmniBill2026!');
+                      } else {
+                        setUsername('admin');
+                        setPassword('');
+                      }
+                      setError(null);
+                    }}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      selectedRole === item.role
+                        ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300 ring-2 ring-emerald-500/30 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 text-xs'
+                    }`}
+                  >
+                    <div className="text-xs font-bold leading-tight">{item.label}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
+            {/* Username Input */}
             <div>
-              <div className="flex justify-between items-center mb-1.5">
-                <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                  Password
+              <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                Username / Role
+              </label>
+              <div className="relative">
+                <User className="w-4 h-4 absolute left-3 top-3 text-slate-500 pointer-events-none" />
+                <input
+                  type="text"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="admin, manager, or cashier1"
+                  className="w-full pl-9 pr-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-emerald-500 font-mono transition"
+                />
+              </div>
+            </div>
+
+            {/* Password Input */}
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  Password / Counter PIN
                 </label>
                 <button
                   type="button"
                   onClick={onOpenOwnerReset}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 transition-colors"
                 >
-                  Forgot owner password?
+                  Forgot password?
                 </button>
               </div>
-              <input
-                type="password"
-                required
-                placeholder="••••••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500"
-              />
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-500 pointer-events-none" />
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full pl-9 pr-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-emerald-500 font-mono tracking-wider transition"
+                />
+              </div>
             </div>
 
             {error && (
-              <div className="text-xs text-rose-300 bg-rose-950/60 p-3 rounded-lg border border-rose-800">
+              <div className="text-xs text-rose-300 bg-rose-950/60 p-2.5 rounded-xl border border-rose-800">
                 {error}
               </div>
             )}
 
-            <div className="pt-2">
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/20 transition-all text-sm disabled:opacity-50"
-              >
-                {loading ? 'Authenticating...' : 'Sign In'}
-              </button>
-            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-sm rounded-xl shadow-lg shadow-emerald-500/20 flex items-center justify-center space-x-2 transition cursor-pointer"
+            >
+              <span>{loading ? 'Authenticating...' : 'Sign In to Counter'}</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </form>
 
-          {onOpenActivation && (
-            <div className="mt-6 pt-6 border-t border-slate-800 text-center">
+          {/* Footer actions */}
+          <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
+            <button
+              type="button"
+              onClick={() => setIsBackupModalOpen(true)}
+              className="hover:text-slate-300 transition"
+            >
+              Encrypted Backup Hub
+            </button>
+            {onOpenActivation && (
               <button
+                type="button"
                 onClick={onOpenActivation}
-                className="text-xs text-slate-400 hover:text-indigo-300 transition-colors"
+                className="hover:text-emerald-400 transition"
               >
-                Need to activate a new terminal? <span className="underline font-semibold">Activate Business</span>
+                License Activation
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
+
+      <DatabaseBackupModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+      />
     </div>
   );
 };

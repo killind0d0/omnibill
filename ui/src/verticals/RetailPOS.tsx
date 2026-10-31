@@ -30,6 +30,7 @@ import {
 } from './types';
 import { VerticalIPCBridge } from './ipc';
 import { computeSaleTotals, formatPaise, parseRupeesToPaise, computeLineSubtotalPaise } from '../lib/tax';
+import { paiseToWords } from '../lib/numbersToWords';
 import { buildUpiString, generateQrDataUrl } from '../lib/upi';
 import { useBarcodeScanner } from '../lib/scanner';
 import { posSound } from '../lib/sound';
@@ -55,6 +56,9 @@ export const RetailPOS: React.FC = () => {
   const [upiQrUrl, setUpiQrUrl] = useState<string>('');
   const [scanNotification, setScanNotification] = useState<string | null>(null);
 
+  // F2 Instant Return / Exchange Mode State
+  const [isReturnMode, setIsReturnMode] = useState<boolean>(false);
+
   const barcodeInputRef = useRef<HTMLInputElement>(null);
 
   // Load catalog on mount
@@ -62,6 +66,29 @@ export const RetailPOS: React.FC = () => {
     VerticalIPCBridge.getResources('RETAIL').then((items) => {
       setCatalog(items);
     });
+  }, []);
+
+  // Global F2 Hotkey for Return / Exchange Mode Toggle
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        setIsReturnMode((prev) => {
+          const next = !prev;
+          if (next) {
+            posSound.playWarning();
+            setScanNotification('🔄 RETURN / EXCHANGE MODE (F2) ACTIVE: Scanned items will be added as Returns');
+          } else {
+            posSound.playItemAdd();
+            setScanNotification('🛒 NORMAL BILLING MODE ACTIVE: Scanned items will be added as Sales');
+          }
+          setTimeout(() => setScanNotification(null), 3000);
+          return next;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Barcode Scanner wedge hook
@@ -94,11 +121,19 @@ export const RetailPOS: React.FC = () => {
     }
   };
 
-  // Add Item to Cart
-  const addItemToCart = (item: ResourceItem, qtyMilli: number = 1000) => {
-    posSound.playItemAdd();
+  // Add Item to Cart (supports instant return flag)
+  const addItemToCart = (item: ResourceItem, qtyMilli: number = 1000, forceReturn?: boolean) => {
+    const isReturn = forceReturn !== undefined ? forceReturn : isReturnMode;
+    if (isReturn) {
+      posSound.playWarning();
+    } else {
+      posSound.playItemAdd();
+    }
+
     setCart((prev) => {
-      const existingIndex = prev.findIndex((line) => line.resource_id === item.id);
+      const existingIndex = prev.findIndex(
+        (line) => line.resource_id === item.id && !!line.is_return === isReturn
+      );
       if (existingIndex >= 0) {
         const copy = [...prev];
         const existing = copy[existingIndex];
@@ -111,7 +146,6 @@ export const RetailPOS: React.FC = () => {
       }
 
       // Maintain base_price_paise as unit_price_paise with discount_paise = 0
-      // This ensures taxable_paise is exactly item.base_price_paise and prevents double-deduction.
       const newLine: VerticalCartLine = {
         id: `line_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         resource_id: item.id,
@@ -125,16 +159,23 @@ export const RetailPOS: React.FC = () => {
         unit_price_paise: item.base_price_paise,
         mrp_paise: item.mrp_paise,
         discount_paise: 0,
-        gross_paise: item.base_price_paise,
-        taxable_paise: item.base_price_paise,
+        is_return: isReturn,
+        gross_paise: item.base_price_paise * (isReturn ? -1 : 1),
+        taxable_paise: item.base_price_paise * (isReturn ? -1 : 1),
         cgst_paise: 0,
         sgst_paise: 0,
         igst_paise: 0,
-        line_total_paise: item.base_price_paise,
+        line_total_paise: item.base_price_paise * (isReturn ? -1 : 1),
       };
 
       return [...prev, newLine];
     });
+  };
+
+  const toggleLineReturn = (lineId: string) => {
+    setCart((prev) =>
+      prev.map((l) => (l.id === lineId ? { ...l, is_return: !l.is_return } : l))
+    );
   };
 
   const updateQuantity = (lineId: string, deltaMilli: number) => {
@@ -174,14 +215,16 @@ export const RetailPOS: React.FC = () => {
       unit_price_paise: line.unit_price_paise,
       discount_paise: line.discount_paise,
       tax_rate_bps: line.tax_rate_bps,
+      is_return: line.is_return,
     }));
 
     return computeSaleTotals(rawLines as any, 'EXCLUSIVE', '27', '27');
   }, [cart]);
 
-  // Compute Total Savings from MRP
+  // Compute Total Savings from MRP (sales lines only)
   const totalSavingsPaise = useMemo(() => {
     return cart.reduce((acc, line) => {
+      if (line.is_return) return acc;
       if (line.mrp_paise && line.mrp_paise > line.unit_price_paise) {
         const itemDiscount = computeLineSubtotalPaise(
           line.mrp_paise - line.unit_price_paise,
@@ -195,13 +238,20 @@ export const RetailPOS: React.FC = () => {
 
   // Payment Tender Calculation
   const totalPayablePaise = computedDocument.totals.total_amount_paise;
+  const isNetRefund = totalPayablePaise < 0;
+  const isEvenExchange = totalPayablePaise === 0 && cart.length > 0;
+  const refundDuePaise = isNetRefund ? Math.abs(totalPayablePaise) : 0;
   const cashTenderedPaise = cashTenderedInput ? parseRupeesToPaise(cashTenderedInput) : 0;
-  const changeDuePaise = Math.max(0, cashTenderedPaise - totalPayablePaise);
-  const remainingDuePaise = Math.max(0, totalPayablePaise - cashTenderedPaise);
+  const changeDuePaise = isNetRefund ? refundDuePaise : Math.max(0, cashTenderedPaise - totalPayablePaise);
+  const remainingDuePaise = !isNetRefund ? Math.max(0, totalPayablePaise - cashTenderedPaise) : 0;
 
   // Set Cash Tendered to Exact or Presets
   const setExactTender = () => {
-    setCashTenderedInput((totalPayablePaise / 100).toFixed(2));
+    if (isNetRefund) {
+      setCashTenderedInput((refundDuePaise / 100).toFixed(2));
+    } else {
+      setCashTenderedInput((totalPayablePaise / 100).toFixed(2));
+    }
   };
 
   const addPresetTender = (rupees: number) => {
@@ -229,20 +279,30 @@ export const RetailPOS: React.FC = () => {
   const handlePostTransaction = async () => {
     if (cart.length === 0) return;
 
-    if (paymentMode === 'CASH' && cashTenderedPaise < totalPayablePaise) {
+    if (!isNetRefund && !isEvenExchange && paymentMode === 'CASH' && cashTenderedPaise < totalPayablePaise) {
       alert(`Tender amount is insufficient. Amount due: ${formatPaise(totalPayablePaise)}, Tendered: ${formatPaise(cashTenderedPaise)}`);
       return;
     }
 
-    const tenderAmount = paymentMode === 'CASH' ? cashTenderedPaise : totalPayablePaise;
+    const tenderAmount = isNetRefund
+      ? refundDuePaise
+      : isEvenExchange
+      ? 0
+      : paymentMode === 'CASH'
+      ? cashTenderedPaise
+      : totalPayablePaise;
 
     const payment: PaymentDetails = {
       mode: paymentMode,
       amount_tendered_paise: tenderAmount,
-      cash_tendered_paise: paymentMode === 'CASH' ? cashTenderedPaise : undefined,
-      change_due_paise: paymentMode === 'CASH' ? changeDuePaise : 0,
+      cash_tendered_paise: paymentMode === 'CASH' ? (isNetRefund ? 0 : cashTenderedPaise) : undefined,
+      change_due_paise: isNetRefund ? refundDuePaise : (paymentMode === 'CASH' ? changeDuePaise : 0),
       reference_number: paymentMode === 'UPI' ? `UPI-${Date.now().toString().slice(-6)}` : undefined,
     };
+
+    const hasReturns = cart.some((l) => l.is_return);
+    const hasSales = cart.some((l) => !l.is_return);
+    const saleType = hasReturns && hasSales ? 'Exchange' : hasReturns ? 'Return/Refund' : 'Sale';
 
     const receipt = await VerticalIPCBridge.postTransaction({
       verticalMode: 'RETAIL',
@@ -256,12 +316,13 @@ export const RetailPOS: React.FC = () => {
       lines: cart,
       totals: computedDocument.totals,
       payment,
-      notes: `Retail Cashier Sale. Customer Savings: ${formatPaise(totalSavingsPaise)}`,
+      notes: `Retail Cashier ${saleType}. ${isNetRefund ? `Refund Paid: ${formatPaise(refundDuePaise)}` : `Net Payable: ${formatPaise(totalPayablePaise)}`}`,
     });
 
     setLastReceipt(receipt);
     setShowSlipModal(true);
     clearCart();
+    setIsReturnMode(false);
   };
 
   // Filter catalog items
@@ -288,9 +349,9 @@ export const RetailPOS: React.FC = () => {
   }, [catalog]);
 
   return (
-    <div className="flex flex-col lg:flex-row h-full w-full gap-4 p-4 bg-slate-950 text-slate-100 font-sans">
+    <div className="flex flex-col lg:flex-row h-full w-full gap-4 p-4 bg-slate-950 text-slate-100 font-sans overflow-hidden">
       {/* LEFT COLUMN: Fast Barcode Lookup + Item Quick Catalog */}
-      <div className="flex-1 flex flex-col space-y-4 min-w-0">
+      <div className="flex-1 flex flex-col space-y-4 min-w-0 min-h-0">
         {/* Top Action Bar: Barcode Input with Auto-focus */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg backdrop-blur">
           <div className="flex flex-col md:flex-row gap-3 items-center justify-between">
@@ -302,7 +363,7 @@ export const RetailPOS: React.FC = () => {
               <input
                 ref={barcodeInputRef}
                 type="text"
-                placeholder="Scan Barcode (F2) or type SKU / Barcode and press Enter..."
+                placeholder={isReturnMode ? "Scan RETURN Item Barcode (F2 to exit) or type SKU..." : "Scan Barcode (F2 for Return) or type SKU..."}
                 value={barcodeInput}
                 onChange={(e) => setBarcodeInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -310,14 +371,22 @@ export const RetailPOS: React.FC = () => {
                     handleBarcodeScan(barcodeInput);
                   }
                 }}
-                className="w-full pl-11 pr-24 py-2.5 bg-slate-950 border border-slate-700/80 rounded-xl text-sm font-mono text-emerald-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
+                className={`w-full pl-11 pr-24 py-2.5 bg-slate-950 border rounded-xl text-sm font-mono placeholder-slate-500 focus:outline-none transition-all ${
+                  isReturnMode
+                    ? 'border-rose-500 text-rose-300 focus:ring-2 focus:ring-rose-500/50'
+                    : 'border-slate-700/80 text-emerald-300 focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500'
+                }`}
               />
               <button
                 onClick={() => handleBarcodeScan(barcodeInput)}
                 type="button"
-                className="absolute right-1.5 top-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow transition"
+                className={`absolute right-1.5 top-1.5 px-3 py-1 rounded-lg text-xs font-semibold shadow transition ${
+                  isReturnMode
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                }`}
               >
-                Scan Add
+                {isReturnMode ? 'Add Return' : 'Scan Add'}
               </button>
 
               {/* Predictive Product Suggestions Dropdown */}
@@ -333,6 +402,34 @@ export const RetailPOS: React.FC = () => {
                 anchorPosition="bottom"
               />
             </div>
+
+            {/* F2 Return Mode Toggle Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsReturnMode((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    posSound.playWarning();
+                    setScanNotification('🔄 RETURN / EXCHANGE MODE (F2) ACTIVE');
+                  } else {
+                    posSound.playItemAdd();
+                    setScanNotification('🛒 NORMAL BILLING MODE ACTIVE');
+                  }
+                  setTimeout(() => setScanNotification(null), 3000);
+                  return next;
+                });
+              }}
+              className={`px-3 py-2.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition border shrink-0 ${
+                isReturnMode
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-950/50 animate-pulse'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'
+              }`}
+              title="Toggle Return / Exchange Mode (Hotkey: F2)"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isReturnMode ? 'text-white' : 'text-rose-400'}`} />
+              <span>{isReturnMode ? 'Return Mode ON (F2)' : 'Return Mode (F2)'}</span>
+            </button>
 
             {/* Customer Quick Tag */}
             <div className="flex items-center space-x-2 w-full md:w-auto">
@@ -357,8 +454,22 @@ export const RetailPOS: React.FC = () => {
             </div>
           </div>
 
+          {/* Active Return Mode Banner */}
+          {isReturnMode && (
+            <div className="mt-3 px-3.5 py-2 bg-rose-950/80 border border-rose-500/60 text-rose-200 rounded-xl text-xs flex items-center justify-between animate-fadeIn shadow-inner">
+              <div className="flex items-center space-x-2">
+                <RotateCcw className="w-4 h-4 text-rose-400 animate-spin" />
+                <span className="font-bold">RETURN / EXCHANGE MODE ACTIVE:</span>
+                <span>Any product scanned or selected from catalog will be added to cart as a returned item (crediting the bill).</span>
+              </div>
+              <span className="px-2 py-0.5 bg-rose-900 border border-rose-700 text-rose-100 rounded text-[10px] font-mono">
+                Press F2 to toggle
+              </span>
+            </div>
+          )}
+
           {/* Scan feedback alert */}
-          {scanNotification && (
+          {scanNotification && !isReturnMode && (
             <div className="mt-2.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 rounded-lg text-xs flex items-center space-x-2 animate-fadeIn">
               <Sparkles className="w-4 h-4 text-emerald-400" />
               <span className="font-medium">{scanNotification}</span>
@@ -455,9 +566,9 @@ export const RetailPOS: React.FC = () => {
       </div>
 
       {/* RIGHT COLUMN: Active Cart + Quick Tender Calculator + Slip Actions */}
-      <div className="w-full lg:w-[420px] flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+      <div className="w-full lg:w-[420px] h-full min-h-0 shrink-0 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
         {/* Cart Header */}
-        <div className="px-4 py-3 bg-slate-850 border-b border-slate-800 flex items-center justify-between">
+        <div className="px-4 py-3 bg-slate-850 border-b border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2">
             <Receipt className="w-4 h-4 text-emerald-400" />
             <h3 className="text-sm font-bold text-slate-100">Current Cart</h3>
@@ -469,8 +580,9 @@ export const RetailPOS: React.FC = () => {
             <button
               onClick={clearCart}
               type="button"
-              className="text-slate-400 hover:text-rose-400 p-1 text-xs flex items-center space-x-1 transition"
+              className="text-slate-400 hover:text-rose-400 p-1 text-xs flex items-center space-x-1 transition focus-ring rounded"
               title="Clear Cart"
+              aria-label="Clear active cart"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Clear</span>
@@ -479,24 +591,43 @@ export const RetailPOS: React.FC = () => {
         </div>
 
         {/* Cart Items Table */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2 divide-y divide-slate-800/40">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 divide-y divide-slate-800/40">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 space-y-2">
               <Barcode className="w-10 h-10 stroke-[1.5] text-slate-600 animate-pulse" />
               <p className="text-xs">Scan an item barcode or click a product from catalog to begin.</p>
+              <div className="flex items-center space-x-1.5 text-[11px] text-slate-500 mt-2">
+                <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-slate-300 font-mono">F2</kbd>
+                <span>Press F2 to toggle Return / Exchange Mode</span>
+              </div>
             </div>
           ) : (
             cart.map((line) => {
               const qtyUnits = line.quantity_milli / 1000;
-              const hasDiscount = line.mrp_paise && line.mrp_paise > line.unit_price_paise;
+              const isReturn = !!line.is_return;
+              const hasDiscount = !isReturn && line.mrp_paise && line.mrp_paise > line.unit_price_paise;
               const savingsPaise = hasDiscount ? (line.mrp_paise! - line.unit_price_paise) * qtyUnits : 0;
 
               return (
-                <div key={line.id} className="pt-2 first:pt-0 flex items-center justify-between text-xs">
+                <div
+                  key={line.id}
+                  className={`pt-2 first:pt-0 flex items-center justify-between text-xs p-1.5 rounded-lg transition-colors ${
+                    isReturn ? 'bg-rose-950/20 border border-rose-900/40' : ''
+                  }`}
+                >
                   <div className="flex-1 min-w-0 pr-2">
-                    <div className="font-semibold text-slate-200 truncate">{line.name}</div>
+                    <div className="flex items-center space-x-1.5">
+                      {isReturn && (
+                        <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[9px] font-bold tracking-wider">
+                          RETURN
+                        </span>
+                      )}
+                      <span className={`font-semibold truncate ${isReturn ? 'text-rose-200' : 'text-slate-200'}`}>
+                        {line.name}
+                      </span>
+                    </div>
                     <div className="flex items-center space-x-2 text-[11px] text-slate-400 mt-0.5">
-                      <span>{formatPaise(line.unit_price_paise)}</span>
+                      <span>{isReturn ? '-' : ''}{formatPaise(line.unit_price_paise)}</span>
                       {hasDiscount && (
                         <span className="line-through text-slate-500">
                           {formatPaise(line.mrp_paise!)}
@@ -531,18 +662,29 @@ export const RetailPOS: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Line Total & Remove */}
-                  <div className="text-right pl-3 min-w-[70px]">
-                    <div className="font-bold text-slate-100 font-mono">
-                      {formatPaise(computeLineSubtotalPaise(line.unit_price_paise, line.quantity_milli))}
+                  {/* Line Total & Return/Sale Toggle & Remove */}
+                  <div className="text-right pl-3 min-w-[75px]">
+                    <div className={`font-bold font-mono ${isReturn ? 'text-rose-400' : 'text-slate-100'}`}>
+                      {isReturn ? '-' : ''}{formatPaise(computeLineSubtotalPaise(line.unit_price_paise, line.quantity_milli))}
                     </div>
-                    <button
-                      onClick={() => removeLine(line.id)}
-                      type="button"
-                      className="text-[10px] text-slate-500 hover:text-rose-400 transition"
-                    >
-                      Remove
-                    </button>
+                    <div className="flex items-center justify-end space-x-1.5 mt-0.5">
+                      <button
+                        onClick={() => toggleLineReturn(line.id)}
+                        type="button"
+                        className="text-[10px] text-slate-400 hover:text-cyan-400 transition"
+                        title={isReturn ? "Mark as normal Sale" : "Mark as customer Return"}
+                      >
+                        {isReturn ? 'To Sale' : 'Return'}
+                      </button>
+                      <span className="text-slate-600">•</span>
+                      <button
+                        onClick={() => removeLine(line.id)}
+                        type="button"
+                        className="text-[10px] text-slate-500 hover:text-rose-400 transition"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -564,7 +706,7 @@ export const RetailPOS: React.FC = () => {
         )}
 
         {/* Totals Breakdown */}
-        <div className="bg-slate-950/90 border-t border-slate-800 p-3 space-y-1.5 text-xs">
+        <div className="bg-slate-950/90 border-t border-slate-800 p-3 space-y-1.5 text-xs shrink-0">
           <div className="flex justify-between text-slate-400">
             <span>Subtotal (Taxable):</span>
             <span className="font-mono">{formatPaise(computedDocument.totals.taxable_paise)}</span>
@@ -581,16 +723,36 @@ export const RetailPOS: React.FC = () => {
               <span className="font-mono">{formatPaise(computedDocument.totals.round_off_paise)}</span>
             </div>
           )}
+          
+          {/* NET IMPACT: REFUND DUE, EVEN EXCHANGE, OR TOTAL PAYABLE */}
           <div className="flex justify-between items-center pt-2 border-t border-slate-800 text-sm font-extrabold text-slate-100">
-            <span>Total Payable:</span>
-            <span className="text-lg font-mono text-emerald-400">
-              {formatPaise(totalPayablePaise)}
+            <span>
+              {isNetRefund
+                ? 'Net Refund Due (Pay Customer):'
+                : isEvenExchange
+                ? 'Even Exchange (No Due):'
+                : 'Total Net Payable:'}
+            </span>
+            <span
+              className={`text-lg font-mono ${
+                isNetRefund
+                  ? 'text-rose-400'
+                  : isEvenExchange
+                  ? 'text-blue-400'
+                  : 'text-emerald-400'
+              }`}
+            >
+              {isNetRefund
+                ? `Refund: ${formatPaise(refundDuePaise)}`
+                : isEvenExchange
+                ? '₹0.00'
+                : formatPaise(totalPayablePaise)}
             </span>
           </div>
         </div>
 
         {/* QUICK PAYMENT TENDER CALCULATOR (Cash Tendered -> Change Due) */}
-        <div className="p-3 bg-slate-850 border-t border-slate-800 space-y-3">
+        <div className="p-3 bg-slate-850 border-t border-slate-800 space-y-3 shrink-0">
           {/* Payment Mode Selector Tabs */}
           <div className="grid grid-cols-3 gap-1.5">
             <button
@@ -635,13 +797,15 @@ export const RetailPOS: React.FC = () => {
           {paymentMode === 'CASH' && (
             <div className="space-y-2 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-400 font-medium">Cash Tendered:</span>
+                <span className="text-slate-400 font-medium">
+                  {isNetRefund ? 'Refund Cash to Pay:' : 'Cash Tendered:'}
+                </span>
                 <button
                   onClick={setExactTender}
                   type="button"
                   className="text-[10px] text-cyan-400 hover:underline font-mono"
                 >
-                  [Exact: {formatPaise(totalPayablePaise)}]
+                  [Exact: {formatPaise(isNetRefund ? refundDuePaise : totalPayablePaise)}]
                 </button>
               </div>
 
@@ -653,7 +817,9 @@ export const RetailPOS: React.FC = () => {
                   placeholder="0.00"
                   value={cashTenderedInput}
                   onChange={(e) => setCashTenderedInput(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-lg font-mono font-bold text-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className={`w-full pl-8 pr-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-lg font-mono font-bold focus:outline-none focus:ring-1 ${
+                    isNetRefund ? 'text-rose-400 focus:ring-rose-500' : 'text-emerald-400 focus:ring-emerald-500'
+                  }`}
                 />
               </div>
 
@@ -689,10 +855,12 @@ export const RetailPOS: React.FC = () => {
                 </button>
               </div>
 
-              {/* CHANGE DUE DISPLAY */}
+              {/* CHANGE DUE / REFUND OUT DISPLAY */}
               <div
                 className={`p-2.5 rounded-lg flex items-center justify-between border ${
-                  changeDuePaise > 0
+                  isNetRefund
+                    ? 'bg-rose-500/10 border-rose-500/40 text-rose-300'
+                    : changeDuePaise > 0
                     ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
                     : cashTenderedPaise > 0 && remainingDuePaise > 0
                     ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
@@ -700,14 +868,18 @@ export const RetailPOS: React.FC = () => {
                 }`}
               >
                 <span className="text-xs font-semibold">
-                  {changeDuePaise > 0
+                  {isNetRefund
+                    ? 'Cash Refund to Customer:'
+                    : changeDuePaise > 0
                     ? 'Change to Return:'
                     : remainingDuePaise > 0 && cashTenderedPaise > 0
                     ? 'Short Amount:'
                     : 'Change Due:'}
                 </span>
                 <span className="text-base font-mono font-extrabold">
-                  {changeDuePaise > 0
+                  {isNetRefund
+                    ? formatPaise(refundDuePaise)
+                    : changeDuePaise > 0
                     ? formatPaise(changeDuePaise)
                     : remainingDuePaise > 0 && cashTenderedPaise > 0
                     ? formatPaise(remainingDuePaise)
@@ -727,13 +899,17 @@ export const RetailPOS: React.FC = () => {
                   className="w-36 h-36 bg-white p-2 rounded-xl shadow-md"
                 />
               ) : (
-                <div className="w-36 h-36 bg-slate-950 flex items-center justify-center text-slate-600 rounded-xl">
-                  Add items to generate QR
+                <div className="w-36 h-36 bg-slate-950 flex items-center justify-center text-slate-600 rounded-xl text-xs text-center p-2">
+                  {isNetRefund ? 'UPI Payout via Bank/QR' : 'Add items to generate QR'}
                 </div>
               )}
               <div className="text-center">
-                <p className="text-xs font-semibold text-slate-200">Scan via GPay / PhonePe / Paytm</p>
-                <p className="text-[11px] text-slate-400 font-mono">Amount: {formatPaise(totalPayablePaise)}</p>
+                <p className="text-xs font-semibold text-slate-200">
+                  {isNetRefund ? 'Direct Bank Refund' : 'Scan via GPay / PhonePe / Paytm'}
+                </p>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Amount: {formatPaise(isNetRefund ? refundDuePaise : totalPayablePaise)}
+                </p>
               </div>
             </div>
           )}
@@ -742,8 +918,12 @@ export const RetailPOS: React.FC = () => {
           {paymentMode === 'CARD' && (
             <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 text-center space-y-2">
               <CreditCard className="w-8 h-8 text-indigo-400 mx-auto" />
-              <p className="text-xs font-semibold text-slate-200">Swipe or Tap Card on EDC Machine</p>
-              <p className="text-[11px] text-slate-400 font-mono">Authorize: {formatPaise(totalPayablePaise)}</p>
+              <p className="text-xs font-semibold text-slate-200">
+                {isNetRefund ? 'Insert Card for Refund Reversal' : 'Swipe or Tap Card on EDC Machine'}
+              </p>
+              <p className="text-[11px] text-slate-400 font-mono">
+                {isNetRefund ? `Reversal: ${formatPaise(refundDuePaise)}` : `Authorize: ${formatPaise(totalPayablePaise)}`}
+              </p>
             </div>
           )}
 
@@ -752,10 +932,22 @@ export const RetailPOS: React.FC = () => {
             onClick={handlePostTransaction}
             disabled={cart.length === 0}
             type="button"
-            className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-950/60 flex items-center justify-center space-x-2 transition"
+            className={`w-full py-3 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-xl font-bold text-sm shadow-lg flex items-center justify-center space-x-2 transition ${
+              isNetRefund
+                ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-950/60'
+                : isEvenExchange
+                ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-950/60'
+                : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-950/60'
+            }`}
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>Complete & Print 80mm Slip</span>
+            <span>
+              {isNetRefund
+                ? `Process Refund (${formatPaise(refundDuePaise)}) & Print Slip`
+                : isEvenExchange
+                ? 'Complete Even Exchange & Print Slip'
+                : 'Complete & Print 80mm Slip'}
+            </span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
@@ -824,15 +1016,18 @@ export const RetailPOS: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-dotted divide-gray-200">
                   {lastReceipt.lines.map((l, i) => (
-                    <tr key={i}>
+                    <tr key={i} className={l.is_return ? 'text-red-700' : ''}>
                       <td className="py-1">
-                        <div className="font-semibold truncate max-w-[140px]">{l.name}</div>
+                        <div className="font-semibold break-words whitespace-normal leading-tight max-w-[140px]">
+                          {l.is_return && <span className="text-red-600 font-bold mr-1">[RETURN]</span>}
+                          {l.name}
+                        </div>
                         <div className="text-[9px] text-gray-500">{l.barcode || l.hsn_sac}</div>
                       </td>
                       <td className="text-center">{l.quantity_milli / 1000}</td>
                       <td className="text-right">{formatPaise(l.unit_price_paise, false)}</td>
                       <td className="text-right font-bold">
-                        {formatPaise(computeLineSubtotalPaise(l.unit_price_paise, l.quantity_milli), false)}
+                        {l.is_return ? '-' : ''}{formatPaise(computeLineSubtotalPaise(l.unit_price_paise, l.quantity_milli), false)}
                       </td>
                     </tr>
                   ))}
@@ -856,8 +1051,14 @@ export const RetailPOS: React.FC = () => {
                   </div>
                 )}
                 <div className="flex justify-between text-xs font-extrabold border-t border-gray-300 pt-1">
-                  <span>NET PAYABLE:</span>
-                  <span>{formatPaise(lastReceipt.totals.total_amount_paise)}</span>
+                  <span>{lastReceipt.totals.total_amount_paise < 0 ? 'NET REFUND DUE (PAID):' : 'NET PAYABLE:'}</span>
+                  <span className={lastReceipt.totals.total_amount_paise < 0 ? 'text-red-600' : ''}>
+                    {formatPaise(Math.abs(lastReceipt.totals.total_amount_paise))}
+                  </span>
+                </div>
+                {/* Amount in words */}
+                <div className="text-[9px] text-gray-700 italic pt-0.5 leading-tight">
+                  <span className="font-semibold not-italic">Amount in Words:</span> {paiseToWords(Math.abs(lastReceipt.totals.total_amount_paise))} {lastReceipt.totals.total_amount_paise < 0 ? '(Refund Paid Out)' : ''}
                 </div>
 
                 {/* Tender & Change Breakdown */}
@@ -866,17 +1067,26 @@ export const RetailPOS: React.FC = () => {
                     <span>Payment Mode:</span>
                     <span className="font-bold">{lastReceipt.payment.mode}</span>
                   </div>
-                  {lastReceipt.payment.cash_tendered_paise && (
-                    <div className="flex justify-between">
-                      <span>Cash Tendered:</span>
-                      <span>{formatPaise(lastReceipt.payment.cash_tendered_paise)}</span>
+                  {lastReceipt.totals.total_amount_paise < 0 ? (
+                    <div className="flex justify-between text-red-600 font-bold">
+                      <span>Cash Refund Given:</span>
+                      <span>{formatPaise(Math.abs(lastReceipt.totals.total_amount_paise))}</span>
                     </div>
-                  )}
-                  {lastReceipt.payment.change_due_paise > 0 && (
-                    <div className="flex justify-between font-bold">
-                      <span>Change Due:</span>
-                      <span>{formatPaise(lastReceipt.payment.change_due_paise)}</span>
-                    </div>
+                  ) : (
+                    <>
+                      {lastReceipt.payment.cash_tendered_paise && (
+                        <div className="flex justify-between">
+                          <span>Cash Tendered:</span>
+                          <span>{formatPaise(lastReceipt.payment.cash_tendered_paise)}</span>
+                        </div>
+                      )}
+                      {lastReceipt.payment.change_due_paise > 0 && (
+                        <div className="flex justify-between font-bold">
+                          <span>Change Due:</span>
+                          <span>{formatPaise(lastReceipt.payment.change_due_paise)}</span>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

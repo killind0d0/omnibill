@@ -11,6 +11,7 @@ export async function clientRequest<T>(
     method?: string;
     token?: string | null;
     body?: any;
+    vertical?: string;
   }
 ): Promise<T> {
   const method = options?.method || 'POST';
@@ -20,6 +21,32 @@ export async function clientRequest<T>(
   if (options?.token) {
     headers['Authorization'] = `Bearer ${options.token}`;
   }
+
+  // Determine active vertical for dynamic database routing
+  let vert = options?.vertical;
+  if (!vert && typeof window !== 'undefined') {
+    try {
+      const activeV = localStorage.getItem('omnibill_active_vertical');
+      if (activeV) {
+        vert = activeV;
+      } else {
+        const sess = localStorage.getItem('omnibill_active_session');
+        if (sess) {
+          const parsed = JSON.parse(sess);
+          vert = parsed.businessType;
+        } else {
+          const acc = localStorage.getItem('omnibill_access_session');
+          if (acc) {
+            const parsedAcc = JSON.parse(acc);
+            vert = parsedAcc.vertical;
+          }
+        }
+      }
+    } catch {}
+  }
+  const chosenVertical = (vert || 'RETAIL').toString().toLowerCase();
+  headers['X-Vertical'] = chosenVertical;
+  headers['X-Business-Type'] = chosenVertical.toUpperCase();
 
   try {
     const res = await fetch(`${BASE_URL}${route}`, {
@@ -64,10 +91,12 @@ export async function apiActivateLicence(
 
 export async function apiLogin(
   username: string,
-  password: string
+  password: string,
+  vertical?: string
 ): Promise<{ token: string; user: AuthenticatedUser }> {
   return clientRequest<{ token: string; user: AuthenticatedUser }>('/api/login', {
     method: 'POST',
+    vertical,
     body: {
       username: username.trim(),
       password,

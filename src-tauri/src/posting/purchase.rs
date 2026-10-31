@@ -66,6 +66,9 @@ pub fn post_purchase(
         });
     }
 
+    // Period lock guard: reject back-dating into closed periods
+    super::check_period_lock(conn, &input.invoice_date)?;
+
     // 2. Validate and compute all line amounts and document totals
     if input.lines.is_empty() {
         return Err(PostingError::EmptyLines);
@@ -151,7 +154,7 @@ pub fn post_purchase(
             cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
             transaction_type, original_transaction_id, invoice_date, created_by_user_id
         ) VALUES (
-            ?1, 'POSTED', ?2, ?3, ?4,
+            ?1, 'DRAFT', ?2, ?3, ?4,
             ?5, ?6, ?7, ?8, ?9,
             ?10, ?11, ?12, ?13, ?14,
             'PURCHASE', NULL, ?15, ?16
@@ -412,6 +415,12 @@ pub fn post_purchase(
             credit_paise: credit_sum,
         });
     }
+
+    // 9.5 Transition status DRAFT -> POSTED (enforces commit-time Dr=Cr balance trigger)
+    tx.execute(
+        "UPDATE transactions SET status = 'POSTED' WHERE id = ?1",
+        params![&tx_id],
+    )?;
 
     // 10. Commit transaction
     tx.commit()?;

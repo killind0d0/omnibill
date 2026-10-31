@@ -316,7 +316,7 @@ fn test_scope2_immutability_triggers_and_replace_bypass_attempts() {
          VALUES ('ent_test', 'CUST-CHAOS', 'CUSTOMER', 'Chaos Cust', '27')",
         [],
     ).unwrap();
-    // Seed transaction
+    // Seed transaction as DRAFT first, attach balanced entries, then transition to POSTED
     conn.execute(
         "INSERT INTO transactions (
             id, status, seller_state_code, place_of_supply_state_code, series,
@@ -324,18 +324,26 @@ fn test_scope2_immutability_triggers_and_replace_bypass_attempts() {
             cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
             created_by_user_id, transaction_type, original_transaction_id, invoice_date
         ) VALUES (
-            'tx_test', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_test',
+            'tx_test', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0001', 'ent_test',
             10000, 0, 10000, 900, 900, 0, 0, 11800, 'usr_chaos', 'SALE', NULL, '2026-05-10'
         )",
         [],
     ).unwrap();
 
-    // Seed ledger entry
+    // Seed balanced ledger entries
     conn.execute(
         "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
          VALUES ('le_test', 'tx_test', NULL, 'acc_test', 11800, 0, 'Test Narration')",
         [],
     ).unwrap();
+    conn.execute(
+        "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+         VALUES ('le_test_cr', 'tx_test', NULL, 'acc_test', 0, 11800, 'Test Credit Narration')",
+        [],
+    ).unwrap();
+
+    // Transition to POSTED (now immutable)
+    conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_test'", []).unwrap();
 
     // 1. Direct UPDATE on ledger_entries MUST FAIL
     let res_upd_le = conn.execute("UPDATE ledger_entries SET debit_paise = 20000 WHERE id = 'le_test'", []);
@@ -383,6 +391,12 @@ fn test_scope2_verify_ledger_detects_intentional_discrepancies() {
     // Migration 3 already seeded acc_1100, acc_4000, acc_1010.
     // Ensure test customer exists:
     conn.execute("INSERT OR IGNORE INTO entities (id, entity_code, entity_type, full_name, state_code) VALUES ('ent_c', 'C1', 'CUSTOMER', 'Cust', '27')", []).unwrap();
+
+    // Drop insertion/balance triggers to simulate offline bit rot / sqlite injection
+    conn.execute("DROP TRIGGER IF EXISTS trg_transactions_no_direct_posted_insert", []).unwrap();
+    conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_insert_only_on_draft", []).unwrap();
+    conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_line_amounts_check", []).unwrap();
+    conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_payment_balance_guard", []).unwrap();
 
     // 1. Create an unbalanced transaction in ledger_entries
     conn.execute(

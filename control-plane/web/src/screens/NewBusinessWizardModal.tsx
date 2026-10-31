@@ -4,6 +4,7 @@ import { CopyButton } from '../components/CopyButton';
 import { apiRequest } from '../utils/api';
 import { formatCivilDate } from '../utils/format';
 import { CreateTenantResponse } from '../types';
+import { GithubSyncService } from '../utils/githubService';
 
 interface NewBusinessWizardModalProps {
   isOpen: boolean;
@@ -30,10 +31,14 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Credentials shown ONCE state
-  // SECRET SHOWN ONCE: The newly generated tenant ID and Owner temporary password
-  // are received from the server response and stored in memory only. Once this modal
-  // is dismissed, the temporary password cannot be retrieved again from the server.
+  // GitHub Auto-Publish State
+  const [githubStatus, setGithubStatus] = useState<{
+    synced: boolean;
+    loading: boolean;
+    message?: string;
+    fileUrl?: string;
+  } | null>(null);
+
   const [createdData, setCreatedData] = useState<CreateTenantResponse | null>(null);
 
   const resetForm = () => {
@@ -46,6 +51,7 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
     setValidUntilDay(todayDay + 30);
     setError('');
     setCreatedData(null);
+    setGithubStatus(null);
   };
 
   const handleClose = () => {
@@ -80,6 +86,12 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
 
       setCreatedData(res);
       onCreated();
+
+      // Automatically trigger GitHub sync if configured
+      const ghConfig = GithubSyncService.getConfig();
+      if (ghConfig.autoSync && ghConfig.token) {
+        handlePushToGithub(res.tenant_id);
+      }
     } catch (err: unknown) {
       if (err instanceof Error) {
         setError(err.message);
@@ -93,6 +105,64 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const getLicensePayload = (tenantId: string) => {
+    const cleanKey = businessName.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    const d = new Date(validUntilDay * 86400 * 1000);
+    const isoDate = d.toISOString().split('T')[0];
+    return {
+      cleanKey,
+      payload: {
+        version: 1,
+        license_key: cleanKey,
+        tenant_id: tenantId,
+        business_name: businessName.trim(),
+        gstin: '27AABCR1234D1Z5',
+        vertical,
+        plan,
+        max_counters: plan === 'basic' ? 1 : maxCounters,
+        valid_until: isoDate,
+        valid_until_day: validUntilDay,
+        status: 'active',
+        support_contact: '+91 98765 43210 • dev@omnibill.com',
+        issued_ms: Date.now(),
+      },
+    };
+  };
+
+  const handlePushToGithub = async (overrideTenantId?: string) => {
+    const tid = overrideTenantId || createdData?.tenant_id;
+    if (!tid) return;
+    const { cleanKey, payload } = getLicensePayload(tid);
+    setGithubStatus({ synced: false, loading: true, message: 'Pushing to GitHub...' });
+    const res = await GithubSyncService.pushLicense(cleanKey, payload);
+    if (res.ok) {
+      setGithubStatus({
+        synced: true,
+        loading: false,
+        message: 'Successfully auto-published to GitHub!',
+        fileUrl: res.fileUrl,
+      });
+    } else {
+      setGithubStatus({
+        synced: false,
+        loading: false,
+        message: res.message,
+      });
+    }
+  };
+
+  const handleDownloadLicenseJson = () => {
+    if (!createdData) return;
+    const { cleanKey, payload } = getLicensePayload(createdData.tenant_id);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${cleanKey}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -163,23 +233,76 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
               <p>• Device activation limit: {plan === 'basic' ? 1 : maxCounters} counter(s)</p>
               <p>• First login will require setting a permanent password</p>
             </div>
+
+            {/* GitHub Serverless Publication Status */}
+            <div className="pt-2 no-print">
+              {githubStatus?.synced ? (
+                <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Live on GitHub: <strong>licenses/{getLicensePayload(createdData.tenant_id).cleanKey}.json</strong></span>
+                  </div>
+                  {githubStatus.fileUrl && (
+                    <a
+                      href={githubStatus.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline font-bold text-white text-[11px]"
+                    >
+                      View on GitHub ↗
+                    </a>
+                  )}
+                </div>
+              ) : githubStatus?.loading ? (
+                <div className="p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-xl text-indigo-300 text-xs flex items-center gap-2">
+                  <div className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                  <span>Pushing license to GitHub repository...</span>
+                </div>
+              ) : (
+                <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl text-slate-300 text-xs flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold text-slate-200">GitHub Auto-Sync: </span>
+                    <span className="text-slate-400">
+                      {githubStatus?.message || 'Publish directly to repository for 100% online activation.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handlePushToGithub()}
+                    className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>🚀 Push to GitHub</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2 no-print">
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium rounded-lg border border-slate-700 transition flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-              </svg>
-              <span>Print Handover Card</span>
-            </button>
+          <div className="flex flex-wrap items-center justify-between pt-2 gap-3 no-print">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                <span>Print Card</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadLicenseJson}
+                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg shadow-sm shadow-blue-600/30 transition flex items-center gap-1.5 cursor-pointer"
+                title="Download JSON to push to GitHub licenses repository or hand to client offline"
+              >
+                <span>📥 Download license.json</span>
+              </button>
+            </div>
             <button
               type="button"
               onClick={handleClose}
-              className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-semibold rounded-lg transition"
+              className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-lg transition"
             >
               Done & Close
             </button>

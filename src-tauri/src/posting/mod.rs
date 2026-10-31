@@ -135,6 +135,10 @@ pub enum PostingError {
         total_amount_paise: i64,
         tendered_paise: i64,
     },
+    PeriodLocked {
+        invoice_date: String,
+        lock_date: String,
+    },
 }
 
 impl std::fmt::Display for PostingError {
@@ -243,8 +247,43 @@ impl std::fmt::Display for PostingError {
                 "Payment tender total ({} paise) does not match invoice total ({} paise)",
                 tendered_paise, total_amount_paise
             ),
+            PostingError::PeriodLocked {
+                invoice_date,
+                lock_date,
+            } => write!(
+                f,
+                "Period is locked: Transaction date '{}' falls into closed accounting period locked up to '{}'",
+                invoice_date, lock_date
+            ),
         }
     }
+}
+
+pub fn check_period_lock(conn: &rusqlite::Connection, tx_date: &str) -> Result<(), PostingError> {
+    if tx_date.is_empty() {
+        return Ok(());
+    }
+    let lock_query: Result<Option<String>, rusqlite::Error> = conn.query_row(
+        "SELECT val FROM app_shared_kv WHERE key LIKE '%period_lock%' ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    );
+
+    if let Ok(Some(lock_json)) = lock_query {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&lock_json) {
+            if let Some(lock_date) = val.get("lock_date").and_then(|v| v.as_str()) {
+                let check_date = if tx_date.len() >= 10 { &tx_date[..10] } else { tx_date };
+                let closed_date = if lock_date.len() >= 10 { &lock_date[..10] } else { lock_date };
+                if !closed_date.is_empty() && check_date <= closed_date {
+                    return Err(PostingError::PeriodLocked {
+                        invoice_date: tx_date.to_string(),
+                        lock_date: lock_date.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl std::error::Error for PostingError {

@@ -13,4 +13,5 @@ pub mod checkin;
 pub mod owner_reset;
 pub mod usage;
 pub mod settings;
+pub mod signaling;
 pub mod routes;

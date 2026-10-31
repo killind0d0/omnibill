@@ -3,7 +3,7 @@ use omnibill_core::access::password::{check_strength, hash_password, verify_pass
 use omnibill_core::access::session::{SessionError, SessionManager};
 use omnibill_core::access::users::{
     AuthError, CreateUserInput, admin_reset_password, authenticate, change_password,
-    create_primary_owner, create_user, set_active, set_role,
+    create_primary_owner, create_user, set_active, set_role, verify_supervisor_pin_override,
 };
 use omnibill_core::database::migrations::{MIGRATIONS, run_migrations};
 use rusqlite::Connection;
@@ -96,6 +96,87 @@ fn test_lockout_and_timing_boundary() {
     assert!(event_types.contains(&"auth.login_fail".to_string()));
     assert!(event_types.contains(&"auth.locked".to_string()));
     assert!(event_types.contains(&"auth.login_ok".to_string()));
+}
+
+#[test]
+fn test_supervisor_override_pin_lockout_and_audit() {
+    let conn = setup_test_db();
+    let now_ms = 1_000_000_000i64;
+
+    let owner_id = create_primary_owner(&conn, "mgr_supervisor", "Store Manager", "MgrPIN&2026!", now_ms)
+        .expect("create supervisor");
+    assert!(owner_id > 0);
+
+    // 1. Successful supervisor override PIN verification
+    let auth = verify_supervisor_pin_override(
+        &conn,
+        "mgr_supervisor",
+        "MgrPIN&2026!",
+        "PRICE_OVERRIDE",
+        "Item damaged box discount",
+        now_ms,
+    ).expect("valid supervisor PIN must succeed");
+    assert_eq!(auth.username, "mgr_supervisor");
+
+    // 2. 4 failed PIN attempts
+    for i in 1..=4 {
+        let err = verify_supervisor_pin_override(
+            &conn,
+            "mgr_supervisor",
+            "wrong_pin",
+            "PRICE_OVERRIDE",
+            "Attempt",
+            now_ms + i * 1000,
+        ).expect_err("wrong pin must fail");
+        assert_eq!(err, AuthError::InvalidCredentials);
+    }
+
+    // 3. 5th failed attempt triggers 15-minute lockout
+    let err5 = verify_supervisor_pin_override(
+        &conn,
+        "mgr_supervisor",
+        "wrong_pin",
+        "PRICE_OVERRIDE",
+        "Attempt 5",
+        now_ms + 5000,
+    ).expect_err("5th attempt triggers lockout");
+    assert_eq!(err5, AuthError::InvalidCredentials);
+
+    let lock_expected = (now_ms + 5000) + 15 * 60_000;
+
+    // 4. While locked: even correct PIN is rejected with AuthError::Locked
+    let err_locked = verify_supervisor_pin_override(
+        &conn,
+        "mgr_supervisor",
+        "MgrPIN&2026!",
+        "PRICE_OVERRIDE",
+        "Attempt while locked",
+        now_ms + 100_000,
+    ).expect_err("locked account must reject supervisor override");
+    assert_eq!(
+        err_locked,
+        AuthError::Locked {
+            until_ms: lock_expected,
+        }
+    );
+
+    // 5. After 15 minutes, account unlocks and override succeeds
+    let auth_unlocked = verify_supervisor_pin_override(
+        &conn,
+        "mgr_supervisor",
+        "MgrPIN&2026!",
+        "BILL_CANCEL",
+        "Customer duplicate payment void",
+        lock_expected + 1,
+    ).expect("supervisor override succeeds after lockout window");
+    assert_eq!(auth_unlocked.username, "mgr_supervisor");
+
+    // Verify audit logs
+    let events = get_audit_events();
+    let types: Vec<String> = events.into_iter().map(|e| e.event_type).collect();
+    assert!(types.contains(&"financial.override".to_string()));
+    assert!(types.contains(&"auth.override_fail".to_string()));
+    assert!(types.contains(&"auth.locked".to_string()));
 }
 
 #[test]

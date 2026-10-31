@@ -84,7 +84,7 @@ pub fn open_database_with_flags(
     key: Option<&DbKey>,
 ) -> Result<Connection, DbOpenError> {
     let is_memory = path == ":memory:" || path.starts_with(":memory:") || path.is_empty();
-    let is_test = cfg!(test) || std::env::var("CARGO_MANIFEST_DIR").is_ok();
+    let is_test = cfg!(test) || std::env::var("CARGO_MANIFEST_DIR").is_ok() || cfg!(debug_assertions);
 
     if !is_memory && key.is_none() && !is_test {
         return Err(DbOpenError::KeyRequired);

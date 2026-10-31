@@ -23,12 +23,17 @@ import {
   Coins,
   Receipt,
   UserCheck,
+  MessageSquare,
 } from 'lucide-react';
 import { Entity, EntityType, LedgerStatementRow, PaymentMode } from '../types/accounting';
 import { ErpStorageService } from '../lib/erpStorage';
 import { formatPaise } from '../lib/tax';
 import { getStateName, isValidGstin, INDIAN_STATES } from '../lib/constants';
 import { Modal } from '../components/common/Modal';
+import { posStorage } from '../lib/api';
+import { shiftManager } from '../lib/shiftManager';
+import { WhatsAppModal } from '../features/reminders/WhatsAppModal';
+import { ReminderItem } from '../features/reminders/types';
 
 export const EntityLedger: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'CUSTOMER' | 'SUPPLIER'>('CUSTOMER');
@@ -44,6 +49,18 @@ export const EntityLedger: React.FC = () => {
   // Modals
   const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
   const [isAddEntityOpen, setIsAddEntityOpen] = useState(false);
+  const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
+  const [whatsAppItem, setWhatsAppItem] = useState<ReminderItem | null>(null);
+
+  // Memoized sender profile for WhatsApp Reminders to prevent unwanted re-renders
+  const senderProfile = useMemo(() => {
+    const biz = posStorage.getBusinessProfile();
+    return {
+      businessName: biz.trade_name || biz.legal_name || 'OmniBill Store',
+      phone: biz.phone,
+      upiVpa: biz.upi_vpa,
+    };
+  }, []);
 
   // Form states - Record Payment
   const [paymentForm, setPaymentForm] = useState({
@@ -157,6 +174,31 @@ export const EntityLedger: React.FC = () => {
     setIsRecordPaymentOpen(true);
   };
 
+  // Open WhatsApp Reminder Modal
+  const openWhatsAppModal = (entity?: Entity) => {
+    const target = entity || selectedEntity;
+    if (!target) return;
+
+    let activeVertical: any = 'RETAIL';
+    try {
+      const stored = localStorage.getItem('omnibill_active_session');
+      if (stored) {
+        const sess = JSON.parse(stored);
+        if (sess?.businessType) activeVertical = sess.businessType;
+      }
+    } catch {}
+
+    setWhatsAppItem({
+      partyId: target.id,
+      partyName: target.full_name,
+      partyPhone: target.phone || '',
+      balanceDuePaise: Math.max(0, target.current_balance_paise),
+      invoiceNumber: undefined,
+      vertical: activeVertical,
+    });
+    setIsWhatsAppOpen(true);
+  };
+
   // Submit Payment
   const handlePaymentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -177,11 +219,32 @@ export const EntityLedger: React.FC = () => {
       narration: paymentForm.narration,
     });
 
+    // CF-17: Record customer cash collection into active cashier shift drawer
+    if (paymentForm.payment_mode === 'CASH' && selectedEntity.entity_type === 'CUSTOMER') {
+      try {
+        shiftManager.recordCashIn(amountPaise);
+      } catch (err) {
+        console.warn('Failed to sync payment into shiftManager cash drawer:', err);
+      }
+    }
+
     // Reload entities and ledger
     loadEntities();
     const rows = ErpStorageService.getLedger(selectedEntity.id);
     setLedgerRows(rows);
     setIsRecordPaymentOpen(false);
+  };
+
+  const handleToggleArchiveEntity = (entity: Entity) => {
+    const isCurrentlyActive = entity.is_active !== false;
+    const updated = entities.map((e) => {
+      if (e.id === entity.id) {
+        return { ...e, is_active: !isCurrentlyActive };
+      }
+      return e;
+    });
+    ErpStorageService.saveEntities(updated);
+    setEntities(updated);
   };
 
   // Submit Add Entity
@@ -378,6 +441,19 @@ export const EntityLedger: React.FC = () => {
                         <span className="text-[10px] uppercase font-semibold text-slate-500">
                           {isSettled ? 'Settled' : isDebit ? 'Dr (Due)' : 'Cr (Payable)'}
                         </span>
+                        {isDebit && entity.entity_type === 'CUSTOMER' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openWhatsAppModal(entity);
+                            }}
+                            title="Send WhatsApp Due Reminder"
+                            className="mt-1 p-1 rounded bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 flex items-center justify-center ml-auto transition-colors"
+                          >
+                            <MessageSquare className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -457,6 +533,18 @@ export const EntityLedger: React.FC = () => {
                       </div>
                     </div>
 
+                    {/* WhatsApp Smart Due Reminder Button */}
+                    {selectedEntity.entity_type === 'CUSTOMER' && selectedEntity.current_balance_paise > 0 && (
+                      <button
+                        onClick={() => openWhatsAppModal()}
+                        className="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 font-bold text-xs shadow-lg shadow-emerald-950/40 transition-all cursor-pointer"
+                        title="Send WhatsApp Payment Follow-up Reminder"
+                      >
+                        <MessageSquare className="w-4 h-4 text-emerald-400" />
+                        <span>WhatsApp Due</span>
+                      </button>
+                    )}
+
                     {/* Quick Record Payment Button */}
                     <button
                       onClick={openPaymentModal}
@@ -507,11 +595,11 @@ export const EntityLedger: React.FC = () => {
               </div>
 
               {/* Interactive Running Statement Table */}
-              <div className="flex-1 overflow-y-auto px-6 py-4">
-                <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-900/50 shadow-xl">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-800 bg-slate-900/90 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none font-mono">
+              <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4">
+                <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-900/50 shadow-xl">
+                  <table className="w-full text-left border-collapse text-xs min-w-[750px]">
+                    <thead className="sticky top-0 bg-slate-900 z-10 shadow-sm">
+                      <tr className="border-b border-slate-800 bg-slate-900 text-[11px] font-semibold text-slate-400 uppercase tracking-wider select-none font-mono">
                         <th className="py-3 px-4">Date</th>
                         <th className="py-3 px-4">Voucher / Invoice #</th>
                         <th className="py-3 px-4">Type</th>
@@ -945,6 +1033,14 @@ export const EntityLedger: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* WhatsApp Smart Reminders Modal */}
+      <WhatsAppModal
+        isOpen={isWhatsAppOpen}
+        onClose={() => setIsWhatsAppOpen(false)}
+        item={whatsAppItem}
+        sender={senderProfile}
+      />
     </div>
   );
 };

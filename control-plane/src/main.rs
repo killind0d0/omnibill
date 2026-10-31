@@ -203,9 +203,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState {
         db_path,
-        server_secret,
+        server_secret: server_secret.clone(),
+        webhook_secret: env::var("OMNIBILL_WEBHOOK_SECRET").ok(),
         signing_key: Arc::new(signing_key),
         rate_limiter: Arc::new(SlidingWindowLimiter::new(60 * 1000, 100)),
+        signaling: control_plane::signaling::SignalingHub::new(),
     });
 
     let app = create_router(state);

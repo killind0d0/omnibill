@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CreditCard, Banknote, QrCode, Split, CheckCircle2 } from 'lucide-react';
+import { CreditCard, Banknote, QrCode, Split, CheckCircle2, Star } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { PaymentDetails, PaymentMode } from '../../types/pos';
 import { formatPaise, parseRupeesToPaise } from '../../lib/tax';
 import { buildUpiString, generateQrDataUrl } from '../../lib/upi';
+import { ErpStorageService } from '../../lib/erpStorage';
 
 interface PaymentModalProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ interface PaymentModalProps {
   invoiceNumber: string;
   upiVpa: string;
   businessName: string;
+  customerPhone?: string;
   onCompletePayment: (payment: PaymentDetails) => void;
 }
 
@@ -22,6 +24,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   invoiceNumber,
   upiVpa,
   businessName,
+  customerPhone,
   onCompletePayment,
 }) => {
   const [mode, setMode] = useState<PaymentMode>('CASH');
@@ -29,22 +32,42 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [splitCashStr, setSplitCashStr] = useState<string>('');
   const [splitUpiStr, setSplitUpiStr] = useState<string>('');
   const [splitCardStr, setSplitCardStr] = useState<string>('');
+  const [splitCreditStr, setSplitCreditStr] = useState<string>('');
   const [upiQrUrl, setUpiQrUrl] = useState<string>('');
   const tenderedInputRef = useRef<HTMLInputElement>(null);
 
-  const totalRupees = totalAmountPaise / 100;
+  // Customer Loyalty state
+  const [isRedeemingLoyalty, setIsRedeemingLoyalty] = useState<boolean>(false);
+  const [pointsToRedeem, setPointsToRedeem] = useState<number>(0);
+  const [loyaltyProfile, setLoyaltyProfile] = useState<any>(null);
+
+  const loyaltyDiscountPaise = isRedeemingLoyalty ? pointsToRedeem * 100 : 0;
+  const netPayablePaise = Math.max(0, totalAmountPaise - loyaltyDiscountPaise);
+  const netPayableRupees = netPayablePaise / 100;
 
   useEffect(() => {
     if (isOpen) {
-      setTenderedStr(totalRupees.toString());
+      // CF-18: Reset to default CASH mode on every open (avoid sticky split/card state)
+      setMode('CASH');
+
+      if (customerPhone && customerPhone.trim().length >= 10) {
+        const prof = ErpStorageService.getCustomerLoyalty(customerPhone.trim());
+        setLoyaltyProfile(prof);
+      } else {
+        setLoyaltyProfile(null);
+      }
+      setIsRedeemingLoyalty(false);
+      setPointsToRedeem(0);
+
+      setTenderedStr((totalAmountPaise / 100).toString());
       setSplitCashStr('');
       setSplitUpiStr('');
       setSplitCardStr('');
+      setSplitCreditStr('');
       setTimeout(() => {
         tenderedInputRef.current?.select();
       }, 50);
 
-      // Generate UPI QR for instant screen display
       const upiUrl = buildUpiString({
         vpa: upiVpa || 'omnimart@icici',
         payeeName: businessName,
@@ -53,36 +76,79 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       });
       generateQrDataUrl(upiUrl, { width: 160 }).then(setUpiQrUrl);
     }
-  }, [isOpen, totalRupees, totalAmountPaise, upiVpa, businessName, invoiceNumber]);
+  }, [isOpen, totalAmountPaise, upiVpa, businessName, invoiceNumber, customerPhone]);
+
+  // Recompute UPI QR when loyalty discount is applied
+  useEffect(() => {
+    if (isOpen) {
+      setTenderedStr(netPayableRupees.toString());
+      const upiUrl = buildUpiString({
+        vpa: upiVpa || 'omnimart@icici',
+        payeeName: businessName,
+        amountPaise: netPayablePaise,
+        invoiceNumber,
+      });
+      generateQrDataUrl(upiUrl, { width: 160 }).then(setUpiQrUrl);
+    }
+  }, [netPayablePaise, netPayableRupees, isOpen, upiVpa, businessName, invoiceNumber]);
 
   const tenderedPaise = parseRupeesToPaise(tenderedStr);
-  const changeDuePaise = Math.max(0, tenderedPaise - totalAmountPaise);
+  const changeDuePaise = Math.max(0, tenderedPaise - netPayablePaise);
 
-  // Split amounts
+  // Split amounts (CF-08: includes Udhaar/Customer Credit)
   const splitCashPaise = parseRupeesToPaise(splitCashStr || '0');
   const splitUpiPaise = parseRupeesToPaise(splitUpiStr || '0');
   const splitCardPaise = parseRupeesToPaise(splitCardStr || '0');
-  const totalSplitPaise = splitCashPaise + splitUpiPaise + splitCardPaise;
-  const splitRemainingPaise = totalAmountPaise - totalSplitPaise;
+  const splitCreditPaise = parseRupeesToPaise(splitCreditStr || '0');
+  const totalSplitPaise = splitCashPaise + splitUpiPaise + splitCardPaise + splitCreditPaise;
+  const splitRemainingPaise = netPayablePaise - totalSplitPaise;
+
+  const isNetRefund = netPayablePaise < 0;
+  const isEvenExchange = netPayablePaise === 0;
 
   const isUnderTendered =
-    mode === 'CASH'
-      ? tenderedPaise < totalAmountPaise
+    isNetRefund || isEvenExchange
+      ? false
+      : mode === 'CASH'
+      ? tenderedPaise < netPayablePaise
       : mode === 'SPLIT'
-      ? totalSplitPaise !== totalAmountPaise
+      ? totalSplitPaise !== netPayablePaise
       : false;
 
   const handleConfirm = () => {
     if (isUnderTendered) {
       return;
     }
+
+    // CF-20: Always accrue or redeem loyalty points when customer is present
+    if (customerPhone && customerPhone.trim().length >= 10) {
+      ErpStorageService.processLoyaltyCheckout(
+        customerPhone.trim(),
+        totalAmountPaise,
+        isRedeemingLoyalty ? pointsToRedeem : 0
+      );
+    }
+
     const payment: PaymentDetails = {
       mode,
-      amount_tendered_paise: mode === 'CASH' ? tenderedPaise : totalAmountPaise,
-      cash_tendered_paise: mode === 'SPLIT' ? splitCashPaise : mode === 'CASH' ? tenderedPaise : undefined,
-      upi_amount_paise: mode === 'SPLIT' ? splitUpiPaise : mode === 'UPI' ? totalAmountPaise : undefined,
-      card_amount_paise: mode === 'SPLIT' ? splitCardPaise : mode === 'CARD' ? totalAmountPaise : undefined,
-      change_due_paise: mode === 'CASH' ? changeDuePaise : 0,
+      amount_tendered_paise: isNetRefund
+        ? Math.abs(netPayablePaise)
+        : isEvenExchange
+        ? 0
+        : mode === 'CASH'
+        ? tenderedPaise
+        : netPayablePaise,
+      cash_tendered_paise: isNetRefund
+        ? 0
+        : mode === 'SPLIT'
+        ? splitCashPaise
+        : mode === 'CASH'
+        ? tenderedPaise
+        : undefined,
+      upi_amount_paise: mode === 'SPLIT' ? splitUpiPaise : mode === 'UPI' ? netPayablePaise : undefined,
+      card_amount_paise: mode === 'SPLIT' ? splitCardPaise : mode === 'CARD' ? netPayablePaise : undefined,
+      credit_amount_paise: mode === 'SPLIT' ? splitCreditPaise : mode === 'CREDIT' ? netPayablePaise : undefined,
+      change_due_paise: isNetRefund ? Math.abs(netPayablePaise) : mode === 'CASH' ? changeDuePaise : 0,
     };
     onCompletePayment(payment);
   };
@@ -104,16 +170,77 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         {/* Payable Header */}
         <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex items-center justify-between">
           <div>
-            <div className="text-xs text-slate-400 uppercase font-semibold">Total Net Amount</div>
-            <div className="text-3xl font-black font-mono text-emerald-400">
-              {formatPaise(totalAmountPaise)}
+            <div className="text-xs text-slate-400 uppercase font-semibold">
+              {loyaltyDiscountPaise > 0 ? 'Net Payable (Post-Loyalty)' : 'Total Net Amount'}
             </div>
+            <div className="text-3xl font-black font-mono text-emerald-400">
+              {formatPaise(netPayablePaise)}
+            </div>
+            {loyaltyDiscountPaise > 0 && (
+              <span className="text-[11px] font-mono text-amber-400 block mt-0.5">
+                (Original {formatPaise(totalAmountPaise)} − {formatPaise(loyaltyDiscountPaise)} Loyalty Discount)
+              </span>
+            )}
           </div>
           <div className="text-right">
             <div className="text-xs text-slate-500 font-mono">Invoice Reference</div>
             <div className="text-sm font-bold font-mono text-slate-300">{invoiceNumber}</div>
           </div>
         </div>
+
+        {/* Customer Loyalty Points Redemption Section */}
+        {customerPhone && loyaltyProfile && (
+          <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
+                Loyalty: {loyaltyProfile.tier} Member ({loyaltyProfile.points_balance} pts available)
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">1 pt = ₹1.00</span>
+            </div>
+
+            {loyaltyProfile.points_balance > 0 && (
+              <div className="flex items-center justify-between pt-1 border-t border-amber-900/30">
+                <label className="text-xs text-slate-300 flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={isRedeemingLoyalty}
+                    onChange={(e) => {
+                      setIsRedeemingLoyalty(e.target.checked);
+                      if (e.target.checked) {
+                        const maxPts = Math.min(loyaltyProfile.points_balance, Math.floor(totalAmountPaise / 100));
+                        setPointsToRedeem(maxPts);
+                      } else {
+                        setPointsToRedeem(0);
+                      }
+                    }}
+                    className="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                  />
+                  <span>Redeem Points for Bill Discount</span>
+                </label>
+
+                {isRedeemingLoyalty && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={Math.min(loyaltyProfile.points_balance, Math.floor(totalAmountPaise / 100))}
+                      value={pointsToRedeem}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(loyaltyProfile.points_balance, parseInt(e.target.value) || 0));
+                        setPointsToRedeem(val);
+                      }}
+                      className="w-20 px-2 py-1 bg-slate-900 border border-amber-700/60 rounded text-xs font-mono font-bold text-amber-300 text-right focus:outline-none"
+                    />
+                    <span className="text-xs font-bold text-emerald-400 font-mono">
+                      -₹{pointsToRedeem.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Payment Modes */}
         <div className="grid grid-cols-4 gap-2 select-none">
@@ -199,28 +326,43 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Note Presets */}
-            <div className="flex flex-wrap gap-1.5 select-none pt-1">
-              <button
-                type="button"
-                onClick={() => handleSetTendered(totalRupees)}
-                className="px-2.5 py-1 bg-emerald-950/60 border border-emerald-700/60 text-emerald-300 rounded text-xs font-semibold hover:bg-emerald-900/60 transition-colors"
-              >
-                Exact (₹{totalRupees.toFixed(0)})
-              </button>
-              {[100, 200, 500, 1000, 2000].map((amt) => {
-                if (amt < totalRupees && totalRupees > 500 && amt < 500) return null;
-                return (
+            {/* Quick Note Presets & Denomination Grid (CF-26) */}
+            <div className="space-y-1.5 select-none pt-1">
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleSetTendered(netPayableRupees)}
+                  className="px-2.5 py-1 bg-emerald-950/60 border border-emerald-700/60 text-emerald-300 rounded text-xs font-semibold hover:bg-emerald-900/60 transition-colors focus-ring"
+                >
+                  Exact ({formatPaise(netPayablePaise)})
+                </button>
+                {[10, 20, 50, 100, 200, 500, 2000].map((amt) => (
                   <button
                     key={amt}
                     type="button"
                     onClick={() => handleSetTendered(amt)}
-                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-mono transition-colors"
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-mono transition-colors focus-ring"
                   >
                     ₹{amt}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                <span className="text-[10px] uppercase font-bold text-slate-500">Add Cash:</span>
+                {[10, 20, 50, 100, 500].map((addAmt) => (
+                  <button
+                    key={'add_' + addAmt}
+                    type="button"
+                    onClick={() => {
+                      const cur = parseRupeesToPaise(tenderedStr || '0');
+                      setTenderedStr(((cur + addAmt * 100) / 100).toString());
+                    }}
+                    className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 border border-slate-700/60 text-slate-300 rounded font-mono text-[10px] transition-colors"
+                  >
+                    +₹{addAmt}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Change Due Display */}
@@ -236,7 +378,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             </div>
 
             {isUnderTendered && (
-              <div className="text-xs text-rose-400 font-semibold bg-rose-950/40 p-2 rounded-lg border border-rose-500/30 flex items-center justify-between">
+              <div role="alert" className="text-xs text-rose-400 font-semibold bg-rose-950/40 p-2 rounded-lg border border-rose-500/30 flex items-center justify-between">
                 <span>⚠️ Cash tendered is insufficient.</span>
                 <span className="font-mono">Due: {formatPaise(totalAmountPaise - tenderedPaise)}</span>
               </div>
@@ -301,9 +443,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                       const cur = parseRupeesToPaise(splitUpiStr || '0');
                       setSplitUpiStr(((cur + splitRemainingPaise) / 100).toFixed(2));
                     }}
-                    className="px-2 py-1 bg-blue-600/20 text-blue-300 border border-blue-500/30 rounded text-[11px] font-bold cursor-pointer"
+                    className="px-2 py-1 bg-blue-600/20 text-blue-300 border border-blue-500/30 rounded text-[11px] font-bold cursor-pointer focus-ring"
                   >
-                    + Fill ₹{(splitRemainingPaise / 100).toFixed(2)}
+                    + Fill {formatPaise(splitRemainingPaise)}
                   </button>
                 )}
               </div>
@@ -317,7 +459,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   value={splitCardStr}
                   onChange={(e) => setSplitCardStr(e.target.value)}
                   placeholder="0.00"
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 font-mono text-sm text-white"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 font-mono text-sm text-white focus-ring"
                 />
                 {splitRemainingPaise > 0 && (
                   <button
@@ -326,9 +468,35 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                       const cur = parseRupeesToPaise(splitCardStr || '0');
                       setSplitCardStr(((cur + splitRemainingPaise) / 100).toFixed(2));
                     }}
-                    className="px-2 py-1 bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded text-[11px] font-bold cursor-pointer"
+                    className="px-2 py-1 bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 rounded text-[11px] font-bold cursor-pointer focus-ring"
                   >
-                    + Fill ₹{(splitRemainingPaise / 100).toFixed(2)}
+                    + Fill {formatPaise(splitRemainingPaise)}
+                  </button>
+                )}
+              </div>
+
+              {/* CF-08: Kirana Udhaar / Customer Credit Split */}
+              <div className="flex items-center space-x-2">
+                <span className="w-20 text-xs text-amber-400 font-medium">Udhaar (₹):</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={splitCreditStr}
+                  onChange={(e) => setSplitCreditStr(e.target.value)}
+                  placeholder="0.00"
+                  className="flex-1 bg-slate-900 border border-amber-700/60 rounded-lg px-3 py-1.5 font-mono text-sm text-amber-200 focus-ring"
+                />
+                {splitRemainingPaise > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cur = parseRupeesToPaise(splitCreditStr || '0');
+                      setSplitCreditStr(((cur + splitRemainingPaise) / 100).toFixed(2));
+                    }}
+                    className="px-2 py-1 bg-amber-600/20 text-amber-300 border border-amber-500/30 rounded text-[11px] font-bold cursor-pointer focus-ring"
+                  >
+                    + Udhaar {formatPaise(splitRemainingPaise)}
                   </button>
                 )}
               </div>
@@ -345,7 +513,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                     : 'text-rose-400'
                 }`}
               >
-                {splitRemainingPaise === 0 ? '✓ 100% Balanced' : `₹${formatPaise(Math.abs(splitRemainingPaise))} ${splitRemainingPaise > 0 ? 'Remaining' : 'Excess'}`}
+                {splitRemainingPaise === 0 ? '✓ 100% Balanced' : `${formatPaise(Math.abs(splitRemainingPaise))} ${splitRemainingPaise > 0 ? 'Remaining' : 'Excess'}`}
               </span>
             </div>
           </div>

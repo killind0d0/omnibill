@@ -64,6 +64,7 @@ import {
 } from './types';
 import { VerticalIPCBridge } from './ipc';
 import { formatPaise, parseRupeesToPaise } from '../lib/tax';
+import { paiseToWords } from '../lib/numbersToWords';
 import { PredictiveSearchDropdown } from '../components/pos/PredictiveSearchDropdown';
 import {
   ACADEMIC_MONTHS,
@@ -942,9 +943,9 @@ ${receiptSettings.receipt_terms}`;
   const totalOverduePaise = defaultersList.reduce((acc, d) => acc + d.overduePaise, 0);
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-950 text-slate-100 p-3 md:p-4 space-y-4 overflow-y-auto select-none">
+    <div className="flex flex-col h-full w-full bg-slate-950 text-slate-100 overflow-hidden select-none">
       {/* TOP BAR: School Brand & Feature Tab Switcher */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shrink-0">
+      <div className="bg-slate-900 border-b border-slate-800 p-3 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shrink-0">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-600 to-yellow-500 flex items-center justify-center text-white shadow-md shadow-amber-500/20 shrink-0">
             <GraduationCap className="w-5 h-5 fill-current" />
@@ -1045,7 +1046,7 @@ ${receiptSettings.receipt_terms}`;
           TAB 1: FEE COLLECTION & 12-MONTH BILLING GRID
           --------------------------------------------------------------------- */}
       {activeTab === 'BILLING' && (
-        <div className="space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-3 md:p-4 space-y-4">
           {/* Top Section: Master Key Student Search & Student Profile Card */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* Student Search & Master Key Selector */}
@@ -1617,7 +1618,7 @@ ${receiptSettings.receipt_terms}`;
           TAB 2: DEFAULTERS TRACKING DASHBOARD & WHATSAPP REMINDERS
           --------------------------------------------------------------------- */}
       {activeTab === 'DEFAULTERS' && (
-        <div className="space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-3 md:p-4 space-y-4">
           {/* Top Metric Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow">
@@ -1759,7 +1760,8 @@ ${receiptSettings.receipt_terms}`;
           TAB 3: CLASS-WISE & MONTH-WISE FEE RULES PRESET CONFIGURATOR
           --------------------------------------------------------------------- */}
       {activeTab === 'FEE_RULES' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-3 md:p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
           {/* Header & Controls */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">
             <div>
@@ -2012,13 +2014,14 @@ ${receiptSettings.receipt_terms}`;
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* ---------------------------------------------------------------------
           TAB 4: SCHOOL OPERATIONAL EXPENSES
           --------------------------------------------------------------------- */}
       {activeTab === 'EXPENSES' && (
-        <div className="space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-3 md:p-4 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow">
               <div className="text-[11px] text-slate-400">Total School Expenses (MTD)</div>
@@ -2108,7 +2111,7 @@ ${receiptSettings.receipt_terms}`;
           TAB 5: MULTI-DIMENSIONAL FEE REPORTS & AUDIT
           --------------------------------------------------------------------- */}
       {activeTab === 'REPORTS' && (
-        <div className="space-y-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-3 md:p-4 space-y-4">
           {/* Action Bar & Filter Bar */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -2338,7 +2341,8 @@ ${receiptSettings.receipt_terms}`;
           TAB 6: RECEIPT CUSTOMIZER WITH LIVE WATERMARK & LOGO ADJUSTMENT
           --------------------------------------------------------------------- */}
       {activeTab === 'RECEIPT_SETTINGS' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="flex-1 overflow-y-auto min-h-0 p-3 md:p-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Left: Customizer Controls */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
@@ -2649,22 +2653,30 @@ ${receiptSettings.receipt_terms}`;
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* ---------------------------------------------------------------------
           MODAL 1: ENROLL NEW STUDENT RECORD
           --------------------------------------------------------------------- */}
       {showNewStudentModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-2xl p-5 shadow-2xl space-y-4 text-xs">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div
+            className="bg-slate-900 border border-slate-800 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl p-5 shadow-2xl space-y-4 text-xs"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="enroll-student-title"
+          >
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+              <h3 id="enroll-student-title" className="text-sm font-bold text-white flex items-center space-x-2">
                 <GraduationCap className="w-4 h-4 text-amber-400" />
                 <span>Enroll New Student Master Record</span>
               </h3>
               <button
+                type="button"
                 onClick={() => setShowNewStudentModal(false)}
-                className="text-slate-500 hover:text-white"
+                className="text-slate-500 hover:text-white focus-ring p-1 rounded"
+                aria-label="Close enroll student dialog"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2797,16 +2809,23 @@ ${receiptSettings.receipt_terms}`;
           MODAL 2: RECORD NEW OPERATIONAL EXPENSE
           --------------------------------------------------------------------- */}
       {showNewExpenseModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl p-5 shadow-2xl space-y-4 text-xs">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div
+            className="bg-slate-900 border border-slate-800 w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl p-5 shadow-2xl space-y-4 text-xs"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="record-expense-title"
+          >
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+              <h3 id="record-expense-title" className="text-sm font-bold text-white flex items-center space-x-2">
                 <Wallet className="w-4 h-4 text-rose-400" />
                 <span>Record School Operational Expense</span>
               </h3>
               <button
+                type="button"
                 onClick={() => setShowNewExpenseModal(false)}
-                className="text-slate-500 hover:text-white"
+                className="text-slate-500 hover:text-white focus-ring p-1 rounded"
+                aria-label="Close record expense dialog"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2916,12 +2935,17 @@ ${receiptSettings.receipt_terms}`;
           WITH LIVE WATERMARK & SCHOOL LOGO
           --------------------------------------------------------------------- */}
       {showVoucherModal && lastReceipt && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 md:p-6">
-          <div className="bg-white text-slate-900 w-full max-w-5xl rounded-2xl shadow-2xl p-5 md:p-6 overflow-y-auto max-h-[95vh] font-sans text-xs">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 md:p-6 animate-in fade-in duration-150">
+          <div
+            className="bg-white text-slate-900 w-full max-w-5xl rounded-2xl shadow-2xl p-5 md:p-6 overflow-y-auto max-h-[90vh] font-sans text-xs"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dual-slip-voucher-title"
+          >
             {/* Header Action Controls (Non-printable) */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 mb-3 border-b border-gray-300 gap-2 non-printable">
               <div>
-                <span className="font-extrabold text-sm text-gray-800 block">
+                <span id="dual-slip-voucher-title" className="font-extrabold text-sm text-gray-800 block">
                   Official Institutional Fee Receipt Voucher
                 </span>
                 <span className="text-[11px] text-gray-500">
@@ -3056,6 +3080,9 @@ ${receiptSettings.receipt_terms}`;
                     <span>NET AMOUNT PAID:</span>
                     <span className="font-mono text-emerald-800">{formatPaise(lastReceipt.net_amount_paise)}</span>
                   </div>
+                  <div className="text-[9px] text-gray-700 italic pt-0.5 leading-tight">
+                    <span className="font-semibold not-italic">Amount in Words:</span> {paiseToWords(lastReceipt.net_amount_paise)}
+                  </div>
                   <div className="text-[9px] text-gray-500 pt-1">
                     Instrument Ref: {lastReceipt.transaction_ref} • Officer: {lastReceipt.staff_name}
                   </div>
@@ -3164,6 +3191,9 @@ ${receiptSettings.receipt_terms}`;
                   <div className="flex justify-between font-bold text-xs border-t border-gray-300 pt-1">
                     <span>NET AMOUNT PAID:</span>
                     <span className="font-mono text-blue-800">{formatPaise(lastReceipt.net_amount_paise)}</span>
+                  </div>
+                  <div className="text-[9px] text-gray-700 italic pt-0.5 leading-tight">
+                    <span className="font-semibold not-italic">Amount in Words:</span> {paiseToWords(lastReceipt.net_amount_paise)}
                   </div>
                   <div className="text-[9px] text-gray-500 pt-1">
                     Instrument Ref: {lastReceipt.transaction_ref} • Officer: {lastReceipt.staff_name}

@@ -149,8 +149,10 @@ async fn setup_test_server() -> TestServer {
     let state = Arc::new(AppState {
         db_path: temp_db.clone(),
         server_secret: TEST_SECRET.into(),
+        webhook_secret: None,
         signing_key: Arc::new(signing_key.clone()),
         rate_limiter: Arc::new(SlidingWindowLimiter::new(60_000, 10_000)),
+        signaling: control_plane::signaling::SignalingHub::new(),
     });
 
     let app = create_router(state);

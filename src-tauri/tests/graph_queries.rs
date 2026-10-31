@@ -300,8 +300,8 @@ fn test_wholesale_reorder_interval() {
             entity_id, subtotal_paise, taxable_paise, total_amount_paise, created_by_user_id,
             transaction_type, invoice_date
         ) VALUES
-        ('tx1', 'POSTED', '27', '27', 'A', 'INV-001', 'cust_1', 1000, 1000, 1000, 'u1', 'SALE', '2026-10-21'),
-        ('tx2', 'POSTED', '27', '27', 'A', 'INV-002', 'cust_1', 1000, 1000, 1000, 'u1', 'SALE', '2026-10-21')",
+        ('tx1', 'DRAFT', '27', '27', 'A', 'INV-001', 'cust_1', 1000, 1000, 1000, 'u1', 'SALE', '2026-10-21'),
+        ('tx2', 'DRAFT', '27', '27', 'A', 'INV-002', 'cust_1', 1000, 1000, 1000, 'u1', 'SALE', '2026-10-21')",
         [],
     ).unwrap();
 
@@ -315,6 +315,15 @@ fn test_wholesale_reorder_interval() {
         [],
     )
     .unwrap();
+
+    // Attach balanced ledger entries and post tx1 and tx2
+    conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le1_dr', 'tx1', NULL, 'acc_1100', 1000, 0, 'tx1 dr')", []).unwrap();
+    conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le1_cr', 'tx1', NULL, 'acc_4000', 0, 1000, 'tx1 cr')", []).unwrap();
+    conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx1'", []).unwrap();
+
+    conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le2_dr', 'tx2', NULL, 'acc_1100', 1000, 0, 'tx2 dr')", []).unwrap();
+    conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le2_cr', 'tx2', NULL, 'acc_4000', 0, 1000, 'tx2 cr')", []).unwrap();
+    conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx2'", []).unwrap();
 
     let int_still_none = wholesale_reorder_interval(&conn, "cust_1", "r1").unwrap();
     assert_eq!(int_still_none, None);
@@ -330,7 +339,7 @@ fn test_wholesale_reorder_interval() {
             entity_id, subtotal_paise, taxable_paise, total_amount_paise, created_by_user_id,
             transaction_type, invoice_date
         ) VALUES
-        ('tx3', 'POSTED', '27', '27', 'A', 'INV-003', 'cust_1', 1000, 1000, 1000, 'u1', 'SALE', '2026-10-21')",
+        ('tx3', 'DRAFT', '27', '27', 'A', 'INV-003', 'cust_1', 1000, 1000, 1000, 'u1', 'SALE', '2026-10-21')",
         [],
     ).unwrap();
 
@@ -343,6 +352,10 @@ fn test_wholesale_reorder_interval() {
         [],
     )
     .unwrap();
+
+    conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le3_dr', 'tx3', NULL, 'acc_1100', 1000, 0, 'tx3 dr')", []).unwrap();
+    conn.execute("INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration) VALUES ('le3_cr', 'tx3', NULL, 'acc_4000', 0, 1000, 'tx3 cr')", []).unwrap();
+    conn.execute("UPDATE transactions SET status = 'POSTED' WHERE id = 'tx3'", []).unwrap();
 
     let int_median = wholesale_reorder_interval(&conn, "cust_1", "r1").unwrap();
     assert_eq!(int_median, Some(12));

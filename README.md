@@ -1,12 +1,12 @@
 # OmniBill ERP
 
-[![Build & Release](https://github.com/killindodo/omnibill/actions/workflows/build-release.yml/badge.svg)](https://github.com/killindodo/omnibill/actions/workflows/build-release.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/killindodo/omnibill/releases)
+[![Build & Release](https://github.com/killind0d0/omnibill/actions/workflows/build-release.yml/badge.svg)](https://github.com/killind0d0/omnibill/actions/workflows/build-release.yml)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/killind0d0/omnibill/releases)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.x-24C8D8.svg)](https://tauri.app/)
 [![Database](https://img.shields.io/badge/sqlite-WAL%20mode-003B57.svg)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)](https://github.com/killindodo/omnibill)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)](https://github.com/killind0d0/omnibill)
 
 > **High-Performance, Zero-Float, Offline-First Desktop ERP & POS for Indian Retail, Wholesale, and Distribution.**
 
@@ -149,7 +149,7 @@ graph TD
 
 ### 1. Clone & Setup
 ```bash
-git clone https://github.com/killindodo/omnibill.git
+git clone https://github.com/killind0d0/omnibill.git
 cd omnibill
 ```
 

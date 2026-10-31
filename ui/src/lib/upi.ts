@@ -13,8 +13,8 @@ export interface UpiParams {
  * e.g. upi://pay?pa=store@upi&pn=Store%20Name&am=150.00&cu=INR&tn=Invoice%20INV-001
  */
 export function buildUpiString(params: UpiParams): string {
-  const vpa = params.vpa.trim();
-  const payeeName = encodeURIComponent(params.payeeName.trim() || 'Merchant');
+  const vpa = (params.vpa || 'merchant@upi').trim();
+  const payeeName = encodeURIComponent((params.payeeName || 'Merchant').trim());
   const amountRupees = (Math.max(0, params.amountPaise) / 100).toFixed(2);
   const noteText = params.note || (params.invoiceNumber ? `Invoice ${params.invoiceNumber}` : 'Payment');
   const transactionNote = encodeURIComponent(noteText);

@@ -10,7 +10,7 @@ interface HelpModalProps {
 export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
   const SHORTCUTS = [
     { key: 'F1', desc: 'Open this Help & Keyboard Shortcuts Cheat Sheet' },
-    { key: 'F2', desc: 'Change Business / Invoice Date' },
+    { key: 'F2', desc: 'Instant Return / Exchange Mode (scan returned items in cart)' },
     { key: 'F3', desc: 'Open Product Catalog / Item Search Modal' },
     { key: 'F4', desc: 'Quick Payment Receipt Modal (Cash/UPI/Card/Split)' },
     { key: 'F5', desc: 'Fast Barcode & Stock Price Check (without altering cart)' },
@@ -18,6 +18,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
     { key: 'F7', desc: 'Recall Suspended / Parked Bills' },
     { key: 'F8', desc: 'Switch to Sales Invoicing Mode (POS)' },
     { key: 'F9', desc: 'Switch to Purchases Entry Mode' },
+    { key: 'Alt+D', desc: 'Change Business / Invoice Date' },
     { key: 'Alt+S', desc: 'Save & Print Instant Thermal Slip (58mm/80mm)' },
     { key: 'Alt+Z', desc: 'Cash Drawer Shift Settlement & Z-Report' },
     { key: 'Enter', desc: 'Submit Quick Entry Bar / Add Scanned Item / Next Field' },

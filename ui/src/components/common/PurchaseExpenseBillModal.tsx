@@ -68,7 +68,7 @@ export const PurchaseExpenseBillModal: React.FC<PurchaseExpenseBillModalProps> =
     const linesText = voucher.items
       .map(
         (i, idx) =>
-          `${idx + 1}. *${i.name}* - ${i.quantity} ${i.unit} @ ₹${formatPaise(i.costPricePaise)} = ₹${formatPaise(i.lineTotalPaise)}`
+          `${idx + 1}. *${i.name}* - ${i.quantity} ${i.unit} @ ${formatPaise(i.costPricePaise)} = ${formatPaise(i.lineTotalPaise)}`
       )
       .join('%0A');
 
@@ -83,7 +83,7 @@ export const PurchaseExpenseBillModal: React.FC<PurchaseExpenseBillModalProps> =
       `*ITEMS PURCHASED:*%0A` +
       linesText +
       `%0A----------------------------------------%0A` +
-      `*TOTAL PURCHASE EXPENSE: ₹${formatPaise(voucher.totalExpensePaise)}*%0A` +
+      `*TOTAL PURCHASE EXPENSE: ${formatPaise(voucher.totalExpensePaise)}*%0A` +
       `----------------------------------------%0A` +
       `*Recorded by:* ${voucher.businessName}%0A` +
       `*Status:* Stock Inventory Incremented & Ledger Booked`;
@@ -273,10 +273,10 @@ export const PurchaseExpenseBillModal: React.FC<PurchaseExpenseBillModalProps> =
                       {item.quantity.toLocaleString('en-IN')} {item.unit}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono text-slate-700">
-                      ₹{formatPaise(item.costPricePaise)}
+                      {formatPaise(item.costPricePaise)}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900">
-                      ₹{formatPaise(item.lineTotalPaise)}
+                      {formatPaise(item.lineTotalPaise)}
                     </td>
                   </tr>
                 ))}
@@ -293,7 +293,7 @@ export const PurchaseExpenseBillModal: React.FC<PurchaseExpenseBillModalProps> =
                     Total Inward Expense:
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono text-base font-black text-emerald-700">
-                    ₹{formatPaise(voucher.totalExpensePaise)}
+                    {formatPaise(voucher.totalExpensePaise)}
                   </td>
                 </tr>
               </tfoot>
@@ -326,7 +326,7 @@ export const PurchaseExpenseBillModal: React.FC<PurchaseExpenseBillModalProps> =
         {/* Modal Bottom Footer */}
         <div className="flex justify-between items-center pt-2 border-t border-slate-800">
           <div className="text-xs text-slate-400">
-            Total Purchase Expense: <b className="text-emerald-400 font-mono">₹{formatPaise(voucher.totalExpensePaise)}</b>
+            Total Purchase Expense: <b className="text-emerald-400 font-mono">{formatPaise(voucher.totalExpensePaise)}</b>
           </div>
           <button
             type="button"

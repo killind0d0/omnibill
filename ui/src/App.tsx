@@ -20,10 +20,17 @@ import {
   Moon,
   Coins,
   TrendingUp,
+  PackagePlus,
+  Headset,
+  Database,
 } from 'lucide-react';
+import { DatabaseBackupModal } from './components/common/DatabaseBackupModal';
+import { StoreProfileModal } from './components/common/StoreProfileModal';
+import { ErpStorageService } from './lib/erpStorage';
 import { LightningPOS } from './components/pos/LightningPOS';
 import { VerticalBillingApp } from './verticals/VerticalBillingApp';
 import { ItemMaster } from './pages/ItemMaster';
+import { GoodsReceipt } from './pages/GoodsReceipt';
 import { EntityLedger } from './pages/EntityLedger';
 import { ReportsDashboard } from './pages/ReportsDashboard';
 import { LoginScreen, UserSession, BusinessType } from './components/auth/LoginScreen';
@@ -34,11 +41,14 @@ import { SellGraphPage } from './features/sellgraph/SellGraphPage';
 import { discoveryStore } from './features/discovery/store';
 import { AlertsPanel } from './features/alerts/AlertsPanel';
 import { AlertsBellButton } from './features/alerts/AlertsBellButton';
+import { LiveSupportModal } from './features/support/LiveSupportModal';
+import { ExpiryBanner, RenewalModal } from './features/licensing';
 
 export type AppRoute =
   | 'POS'
   | 'VERTICALS'
   | 'ITEM_MASTER'
+  | 'GOODS_RECEIPT'
   | 'ENTITY_LEDGER'
   | 'REPORTS'
   | 'DISCOVERY'
@@ -91,6 +101,22 @@ export const App: React.FC = () => {
   const [soundEnabled, setSoundEnabled] = useState(posSound.enabled);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
+  const [isLiveSupportOpen, setIsLiveSupportOpen] = useState(false);
+  const [isRenewalOpen, setIsRenewalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [isStoreProfileOpen, setIsStoreProfileOpen] = useState(false);
+
+  // Sync profile changes across components
+  useEffect(() => {
+    const handleProfileSync = (e: any) => {
+      const updated = e.detail;
+      if (updated?.trade_name) {
+        setSession((prev) => (prev ? { ...prev, storeName: updated.trade_name } : prev));
+      }
+    };
+    window.addEventListener('omnibill_profile_sync', handleProfileSync);
+    return () => window.removeEventListener('omnibill_profile_sync', handleProfileSync);
+  }, []);
 
   // Sync route based on business type on initial load or session change
   useEffect(() => {
@@ -102,6 +128,21 @@ export const App: React.FC = () => {
         setCurrentRoute('VERTICALS');
       }
     }
+  }, [session?.businessType]);
+
+  // Synchronize with shared backend SQLite database across all browsers (Firefox, Chrome, Tauri)
+  useEffect(() => {
+    ErpStorageService.initSharedSync();
+
+    const handleFocus = () => {
+      ErpStorageService.initSharedSync();
+    };
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('visibilitychange', handleFocus);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleFocus);
+    };
   }, [session?.businessType]);
 
   const toggleSound = () => {
@@ -116,6 +157,12 @@ export const App: React.FC = () => {
   const handleLogout = () => {
     posSound.playWarning();
     setSession(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('omnibill_active_session');
+      localStorage.removeItem('omnibill_access_session');
+      localStorage.removeItem('omnibill_active_vertical');
+      window.location.reload();
+    }
   };
 
   // Global Keyboard Shortcuts for Navigation (Active only when logged in)
@@ -131,6 +178,11 @@ export const App: React.FC = () => {
       if (session.businessType === 'RETAIL') {
         // F8: POS Invoicing
         if (e.key === 'F8') {
+          e.preventDefault();
+          setCurrentRoute('POS');
+        }
+        // F9: Purchases Entry
+        else if (e.key === 'F9') {
           e.preventDefault();
           setCurrentRoute('POS');
         }
@@ -171,6 +223,11 @@ export const App: React.FC = () => {
         e.preventDefault();
         setIsShiftModalOpen(true);
       }
+      // Alt+B: Database Backup, Restore & Health
+      else if (e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        setIsBackupModalOpen(true);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -182,6 +239,9 @@ export const App: React.FC = () => {
     return (
       <LoginScreen
         onLogin={(newSession) => {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('omnibill_active_vertical', newSession.businessType);
+          }
           setSession(newSession);
         }}
         savedSession={session}
@@ -224,6 +284,9 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 select-none">
+      {/* License Expiry & Grace Period Warning Banner */}
+      <ExpiryBanner onOpenRenewal={() => setIsRenewalOpen(true)} />
+
       {/* Top Application Bar & Main Navigation */}
       <header className="h-14 bg-slate-900 border-b border-slate-800 px-3 md:px-4 flex items-center justify-between shadow-lg z-20 shrink-0">
         {/* Brand & Business Identity */}
@@ -296,6 +359,20 @@ export const App: React.FC = () => {
                 >
                   F10
                 </kbd>
+              </button>
+
+              {/* Goods Receipt Note (GRN) Inward */}
+              <button
+                onClick={() => setCurrentRoute('GOODS_RECEIPT')}
+                className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  currentRoute === 'GOODS_RECEIPT'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+                title="Goods Received Note & Inward Stock Intake"
+              >
+                <PackagePlus className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Inward GRN</span>
               </button>
 
               {/* Entity & Ledger */}
@@ -417,13 +494,51 @@ export const App: React.FC = () => {
             <span className="hidden lg:inline">Shift / Drawer</span>
           </button>
 
+          {/* 1-Click Database Safety & Backup Hub */}
+          <button
+            onClick={() => setIsBackupModalOpen(true)}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-300 text-xs font-semibold transition cursor-pointer"
+            title="Database Backup, Restore & Health (Alt+B)"
+          >
+            <Database className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden lg:inline">Backup & DB</span>
+          </button>
+
+          {/* Store Profile & GSTIN Settings */}
+          <button
+            onClick={() => setIsStoreProfileOpen(true)}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-semibold transition cursor-pointer"
+            title="Configure Store Profile, Name & GSTIN"
+          >
+            <Store className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden lg:inline">Store Setup</span>
+          </button>
+
           {/* Risk & Inventory Alerts Bell Button */}
           <AlertsBellButton onClick={() => setIsAlertsOpen(true)} />
 
+          {/* 1-Click Live Support Remote Assistance Button */}
+          <button
+            type="button"
+            onClick={() => setIsLiveSupportOpen(true)}
+            aria-label="Open OmniBill Live Remote Assistance"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-xs font-semibold transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            title="OmniBill Live Remote Assistance (Screen Share with HQ)"
+          >
+            <Headset className="w-3.5 h-3.5 text-sky-400" aria-hidden="true" />
+            <span className="hidden xl:inline">Live Support</span>
+          </button>
+
           {/* Daylight / Midnight Mode Toggle */}
           <button
+            type="button"
             onClick={toggleTheme}
-            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+            aria-label={
+              theme === 'light'
+                ? 'Switch to Midnight Dark Mode (Alt+T)'
+                : 'Switch to Daylight High-Contrast Mode (Alt+T)'
+            }
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               theme === 'light'
                 ? 'bg-amber-500/20 text-amber-600 hover:bg-amber-500/30'
                 : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
@@ -435,41 +550,52 @@ export const App: React.FC = () => {
             }
           >
             {theme === 'light' ? (
-              <Moon className="w-4 h-4 text-amber-500" />
+              <Moon className="w-4 h-4 text-amber-500" aria-hidden="true" />
             ) : (
-              <Sun className="w-4 h-4 text-yellow-400" />
+              <Sun className="w-4 h-4 text-yellow-400" aria-hidden="true" />
             )}
           </button>
 
           {/* POS Sound Toggle */}
           <button
+            type="button"
             onClick={toggleSound}
-            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+            aria-label={soundEnabled ? 'Mute POS audio beeps' : 'Enable POS audio beeps'}
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               soundEnabled
                 ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
                 : 'bg-slate-800 text-slate-500 hover:bg-slate-700'
             }`}
             title={soundEnabled ? 'Mute POS Audio Beeps' : 'Enable POS Audio Beeps'}
           >
-            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            {soundEnabled ? (
+              <Volume2 className="w-4 h-4" aria-hidden="true" />
+            ) : (
+              <VolumeX className="w-4 h-4" aria-hidden="true" />
+            )}
           </button>
 
           {/* Keyboard Shortcuts Hint */}
           <button
+            type="button"
             onClick={() => setShowNavHelp(!showNavHelp)}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            aria-label="Toggle navigation keyboard shortcuts helper bar"
+            aria-expanded={showNavHelp}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
             title="Global Navigation Shortcuts (Alt+H)"
           >
-            <HelpCircle className="w-4 h-4" />
+            <HelpCircle className="w-4 h-4" aria-hidden="true" />
           </button>
 
           {/* Switch Store / Lock Counter */}
           <button
+            type="button"
             onClick={handleLogout}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 text-xs font-semibold transition cursor-pointer"
+            aria-label="Lock Counter and Switch Business Type"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 text-xs font-semibold transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
             title="Lock Counter & Switch Business Type (Alt+L)"
           >
-            <LogOut className="w-3.5 h-3.5" />
+            <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
             <span className="hidden xl:inline">Switch Store</span>
           </button>
         </div>
@@ -478,7 +604,7 @@ export const App: React.FC = () => {
       {/* Navigation Shortcuts Helper Bar (Expandable) */}
       {/* Navigation Shortcuts Helper Bar (Expandable) */}
       {showNavHelp && (
-        <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 flex items-center justify-between text-xs text-slate-300 select-none animate-in fade-in duration-100">
+        <div className="bg-slate-900 border-b border-slate-800 px-6 py-2 flex items-center justify-between text-xs text-slate-300 select-none animate-in fade-in duration-100 shrink-0">
           <div className="flex items-center space-x-4 flex-wrap">
             <span className="font-bold text-blue-400 flex items-center gap-1">
               <Command className="w-3.5 h-3.5" /> Hotkeys:
@@ -551,9 +677,9 @@ export const App: React.FC = () => {
       )}
 
       {/* Main View Router Outlet - Preserves State on Tab Switch */}
-      <main className="flex-1 flex overflow-hidden relative">
+      <main className="flex-1 flex overflow-hidden min-h-0 relative">
         {session.businessType !== 'RETAIL' ? (
-          <div className="h-full w-full flex-1 flex overflow-hidden">
+          <div className="h-full w-full flex-1 flex overflow-hidden min-h-0">
             <VerticalBillingApp
               initialVertical={session.businessType}
               lockedVertical={session.businessType}
@@ -563,7 +689,7 @@ export const App: React.FC = () => {
         ) : (
           <>
             <div
-              className={`h-full w-full flex-1 flex overflow-hidden ${
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
                 currentRoute === 'POS' ? '' : 'hidden'
               }`}
             >
@@ -571,7 +697,7 @@ export const App: React.FC = () => {
             </div>
 
             <div
-              className={`h-full w-full flex-1 flex overflow-hidden ${
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
                 currentRoute === 'ITEM_MASTER' ? '' : 'hidden'
               }`}
             >
@@ -579,7 +705,15 @@ export const App: React.FC = () => {
             </div>
 
             <div
-              className={`h-full w-full flex-1 flex overflow-hidden ${
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
+                currentRoute === 'GOODS_RECEIPT' ? '' : 'hidden'
+              }`}
+            >
+              <GoodsReceipt />
+            </div>
+
+            <div
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
                 currentRoute === 'ENTITY_LEDGER' ? '' : 'hidden'
               }`}
             >
@@ -587,7 +721,7 @@ export const App: React.FC = () => {
             </div>
 
             <div
-              className={`h-full w-full flex-1 flex overflow-hidden ${
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
                 currentRoute === 'REPORTS' ? '' : 'hidden'
               }`}
             >
@@ -595,7 +729,7 @@ export const App: React.FC = () => {
             </div>
 
             <div
-              className={`h-full w-full flex-1 flex overflow-hidden ${
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
                 currentRoute === 'DISCOVERY' ? '' : 'hidden'
               }`}
             >
@@ -606,7 +740,7 @@ export const App: React.FC = () => {
             </div>
 
             <div
-              className={`h-full w-full flex-1 flex overflow-hidden ${
+              className={`h-full w-full flex-1 flex overflow-hidden min-h-0 ${
                 currentRoute === 'SELL_GRAPH' ? '' : 'hidden'
               }`}
             >
@@ -642,6 +776,31 @@ export const App: React.FC = () => {
           discoveryStore.setFilter({ text: name });
           setCurrentRoute('DISCOVERY');
         }}
+      />
+
+      {/* Live Support Remote Assistance Modal */}
+      <LiveSupportModal
+        isOpen={isLiveSupportOpen}
+        onClose={() => setIsLiveSupportOpen(false)}
+      />
+
+      {/* In-App Subscription Renewal Modal */}
+      <RenewalModal
+        isOpen={isRenewalOpen}
+        onClose={() => setIsRenewalOpen(false)}
+      />
+
+      {/* 1-Click Database Safety & Backup Hub Modal */}
+      <DatabaseBackupModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        activeVertical={session?.businessType || 'RETAIL'}
+      />
+
+      {/* Store Profile & GSTIN Settings Modal */}
+      <StoreProfileModal
+        isOpen={isStoreProfileOpen}
+        onClose={() => setIsStoreProfileOpen(false)}
       />
     </div>
   );

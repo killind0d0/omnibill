@@ -27,9 +27,28 @@ export async function fetchSellGraphData<T>(
     });
   }
 
+  let token: string | undefined;
+  if (typeof window !== 'undefined') {
+    try {
+      const sess = localStorage.getItem('omnibill_access_session');
+      if (sess) {
+        token = JSON.parse(sess).token;
+      }
+    } catch {}
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Vertical': vertical.toLowerCase(),
+    'X-Business-Type': vertical.toUpperCase(),
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch('http://127.0.0.1:4000/api/discovery/sell_graph', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ kind, params, vertical }),
   });
 

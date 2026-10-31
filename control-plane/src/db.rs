@@ -25,7 +25,17 @@ pub fn open_in_memory() -> Result<Connection> {
 }
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch(INIT_SQL)
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='admins'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !exists {
+        conn.execute_batch(INIT_SQL)?;
+    }
+    Ok(())
 }
 
 pub fn compute_audit_hash(

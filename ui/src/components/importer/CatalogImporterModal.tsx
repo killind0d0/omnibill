@@ -18,6 +18,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { ResourceItem } from '../../types/pos';
+import { getActiveVertical, posStorage } from '../../lib/api';
+import { ErpStorageService } from '../../lib/erpStorage';
 import { posSound } from '../../lib/sound';
 import { formatPaise } from '../../lib/tax';
 
@@ -347,8 +349,10 @@ export const CatalogImporterModal: React.FC<CatalogImporterModalProps> = ({
     if (previewItems.length === 0) return;
 
     try {
-      // 1. Ingest into posStorage (omnibill_products_v1)
-      const existingPos = JSON.parse(localStorage.getItem('omnibill_products_v1') || '[]');
+      const v = getActiveVertical();
+
+      // 1. Ingest into posStorage (LightningPOS & Counter Catalog)
+      const existingPos = posStorage.getProducts();
       const newPosItems: ResourceItem[] = previewItems.map((p) => ({
         id: p.id,
         sku: p.sku,
@@ -363,39 +367,53 @@ export const CatalogImporterModal: React.FC<CatalogImporterModalProps> = ({
       }));
 
       // Merge and deduplicate by barcode/sku
-      const mergedPos = [...newPosItems, ...existingPos];
-      localStorage.setItem('omnibill_products_v1', JSON.stringify(mergedPos));
+      const posMap = new Map<string, ResourceItem>();
+      existingPos.forEach((item) => posMap.set(item.barcode.toLowerCase(), item));
+      newPosItems.forEach((item) => posMap.set(item.barcode.toLowerCase(), item));
+      const mergedPos = Array.from(posMap.values());
+      posStorage.setProducts(mergedPos);
 
-      // 2. Ingest into ErpStorage (omnibill_items_v2) for Item Master & Reports
-      const existingErp = JSON.parse(localStorage.getItem('omnibill_items_v2') || '[]');
-      const newErpItems = previewItems.map((p) => ({
-        id: p.id,
-        sku: p.sku,
-        name: p.name,
-        hsn_sac: p.hsn,
-        tax_rate_bps: p.tax_rate_bps,
-        base_price_paise: p.base_price_paise,
-        cost_price_paise: p.cost_price_paise,
-        unit: p.unit,
-        is_stock_tracked: true,
-        reorder_level_milli: 10000,
-        category: p.category,
-        created_at: new Date().toISOString(),
-        lots: [
-          {
-            id: `lot_${p.id}`,
-            resource_id: p.id,
-            batch_number: 'BATCH-INIT',
-            expiry_date: '2027-12-31',
-            mrp_paise: p.mrp_paise || p.base_price_paise,
-            cost_price_paise: p.cost_price_paise,
-            current_stock_milli: p.stock_milli,
-            created_at: new Date().toISOString(),
-          },
-        ],
-      }));
+      // 2. Ingest into ErpStorage for Item Master, Stock Valuation & Downstream Reports
+      const existingErp = ErpStorageService.getItems();
+      const erpMap = new Map<string, any>();
+      existingErp.forEach((item) => erpMap.set((item.barcode || item.sku).toLowerCase(), item));
 
-      localStorage.setItem('omnibill_items_v2', JSON.stringify([...newErpItems, ...existingErp]));
+      for (const p of previewItems) {
+        erpMap.set((p.barcode || p.sku).toLowerCase(), {
+          id: p.id,
+          sku: p.sku,
+          barcode: p.barcode,
+          name: p.name,
+          hsn_sac: p.hsn,
+          tax_rate_bps: p.tax_rate_bps,
+          base_price_paise: p.base_price_paise,
+          cost_price_paise: p.cost_price_paise,
+          unit: p.unit,
+          is_stock_tracked: true,
+          reorder_level_milli: 10000,
+          category: p.category,
+          created_at: new Date().toISOString(),
+          lots: [
+            {
+              id: `lot_${p.id}`,
+              resource_id: p.id,
+              batch_number: 'BATCH-INIT',
+              expiry_date: '2027-12-31',
+              mrp_paise: p.mrp_paise || p.base_price_paise,
+              cost_price_paise: p.cost_price_paise,
+              current_stock_milli: p.stock_milli,
+              created_at: new Date().toISOString(),
+            },
+          ],
+        });
+      }
+      const mergedErp = Array.from(erpMap.values());
+      ErpStorageService.saveItems(mergedErp);
+
+      // 3. Dispatch global catalog sync event
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('omnibill_catalog_sync', { detail: { vertical: v } }));
+      }
 
       posSound.playSuccess();
       onImportSuccess(previewItems.length);

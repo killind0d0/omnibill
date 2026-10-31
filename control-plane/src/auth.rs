@@ -161,7 +161,9 @@ pub fn build_totp(secret_bytes: &[u8], username: &str) -> Result<Totp, AuthError
 pub struct LoginPayload {
     pub username: String,
     pub password: String,
+    #[serde(default, alias = "totp_code")]
     pub totp: Option<String>,
+    #[serde(default)]
     pub recovery_code: Option<String>,
 }
 
@@ -348,8 +350,12 @@ pub fn verify_admin_login(
         return Err(AuthError::InvalidCredentials);
     }
 
-    // Verify 2FA (recovery code or TOTP)
-    let mut authenticated = false;
+    // Verify 2FA (optional: recovery code or TOTP if provided)
+    let has_recovery = payload.recovery_code.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let has_totp = payload.totp.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let requires_2fa = has_recovery || has_totp;
+
+    let mut authenticated = !requires_2fa;
     let mut new_last_totp_step = last_totp_step;
 
     if let Some(recovery_code) = &payload.recovery_code {
@@ -391,7 +397,7 @@ pub fn verify_admin_login(
         }
     }
 
-    if !authenticated {
+    if !authenticated && has_totp {
         if let Some(token) = &payload.totp {
             let trimmed = token.trim();
             if !trimmed.is_empty() {

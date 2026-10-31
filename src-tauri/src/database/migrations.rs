@@ -10,8 +10,10 @@ pub mod migration_7;
 pub mod migration_8;
 #[path = "migration_9.rs"]
 pub mod migration_9;
+#[path = "migration_10.rs"]
+pub mod migration_10;
 
-pub const LATEST_VERSION: i32 = 9;
+pub const LATEST_VERSION: i32 = 10;
 
 pub struct Migration {
     pub version: i32,
@@ -64,6 +66,11 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 9,
         description: "Role permissions table for owner-customized permission overrides",
         sql: migration_9::MIGRATION_9_SQL,
+    },
+    Migration {
+        version: 10,
+        description: "Two-phase draft/post ledger gate, persistent HMAC audit log, and statutory period lock",
+        sql: migration_10::MIGRATION_10_SQL,
     },
 ];
 
@@ -157,7 +164,7 @@ CREATE TABLE IF NOT EXISTS number_series (
 -- 8. TRANSACTIONS
 CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
-    status TEXT NOT NULL CHECK (status IN ('POSTED', 'CANCELLED')),
+    status TEXT NOT NULL CHECK (status IN ('DRAFT', 'POSTED', 'CANCELLED')),
     seller_state_code TEXT NOT NULL,
     place_of_supply_state_code TEXT NOT NULL,
     series TEXT NOT NULL,
@@ -598,6 +605,20 @@ pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result
             )
             .into(),
         ));
+    }
+
+    if max_target_version > current_version {
+        // Pre-migration backup for disk-backed database
+        if let Ok(file_path) = conn.query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2)) {
+            if !file_path.is_empty() && std::path::Path::new(&file_path).exists() {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let backup_path = format!("{}.pre_migration_v{}_{}.bak", file_path, current_version, ts);
+                let _ = std::fs::copy(&file_path, &backup_path);
+            }
+        }
     }
 
     for migration in migrations {

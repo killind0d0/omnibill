@@ -2,9 +2,11 @@ import React from 'react';
 import { AdminMe } from '../types';
 import { apiRequest } from '../utils/api';
 
+export type NavTab = 'tenants' | 'audit' | 'settings' | 'support';
+
 interface NavbarProps {
-  currentTab: 'tenants' | 'audit' | 'settings';
-  onSelectTab: (tab: 'tenants' | 'audit' | 'settings') => void;
+  currentTab: NavTab;
+  onSelectTab: (tab: NavTab) => void;
   admin: AdminMe | null;
   onLogout: () => void;
 }
@@ -76,6 +78,29 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 Settings
               </button>
+              <button
+                onClick={() => onSelectTab('support')}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  currentTab === 'support'
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <svg
+                  className="w-4 h-4 text-emerald-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M3 18v-6a9 9 0 0118 0v6M3 18a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v3zm18 0a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h2v3z"
+                  />
+                </svg>
+                <span>Live Support</span>
+              </button>
             </nav>
           </div>
 
@@ -123,6 +148,27 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             Settings
+          </button>
+          <button
+            onClick={() => onSelectTab('support')}
+            className={`flex-1 py-1 text-center rounded text-xs font-medium flex items-center justify-center gap-1 ${
+              currentTab === 'support' ? 'bg-slate-800 text-white' : 'text-slate-400'
+            }`}
+          >
+            <svg
+              className="w-3.5 h-3.5 text-emerald-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 18v-6a9 9 0 0118 0v6M3 18a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3v3zm18 0a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h2v3z"
+              />
+            </svg>
+            <span>Support</span>
           </button>
         </div>
       </div>

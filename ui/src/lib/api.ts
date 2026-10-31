@@ -1,4 +1,5 @@
 import { BusinessProfile, CompletedSale, ResourceItem } from '../types/pos';
+import { ErpStorageService } from './erpStorage';
 
 // Detect whether running in Tauri desktop wrapper
 export const isTauri = (): boolean => {
@@ -169,23 +170,227 @@ export const INITIAL_PRODUCTS: ResourceItem[] = [
 ];
 
 // Local Storage Keys
-const STORAGE_KEY_PRODUCTS = 'omnibill_products_v1';
-const STORAGE_KEY_SALES = 'omnibill_sales_v1';
-const STORAGE_KEY_PURCHASES = 'omnibill_purchases_v1';
-const STORAGE_KEY_PROFILE = 'omnibill_profile_v1';
-const STORAGE_KEY_INV_COUNTER = 'omnibill_inv_counter_v1';
+const STORAGE_KEY_PRODUCTS = 'omnibill_products_v2';
+const STORAGE_KEY_SALES = 'omnibill_sales_v2';
+const STORAGE_KEY_PURCHASES = 'omnibill_purchases_v2';
+const STORAGE_KEY_PROFILE = 'omnibill_profile_v2';
+const STORAGE_KEY_INV_COUNTER = 'omnibill_inv_counter_v2';
+
+export type BusinessType = 'RETAIL' | 'WHOLESALE' | 'SCHOOL' | 'HOSPITAL';
+
+export const getActiveVertical = (): BusinessType => {
+  if (typeof window !== 'undefined') {
+    try {
+      const sess = localStorage.getItem('omnibill_active_session');
+      if (sess) {
+        const parsed = JSON.parse(sess);
+        if (parsed.businessType) return parsed.businessType;
+      }
+    } catch {}
+  }
+  return 'RETAIL';
+};
+
+export const getInitialBusinessProfileForVertical = (vertical: BusinessType): BusinessProfile => {
+  switch (vertical) {
+    case 'WHOLESALE':
+      return {
+        id: 'biz_wholesale',
+        legal_name: 'Apex Wholesale & Bulk Supply Enterprise',
+        trade_name: 'Apex Wholesale Traders',
+        gstin: '27AABCW5678F1Z9',
+        state_code: '27',
+        phone: '+91 98220 12345',
+        email: 'billing@apexwholesale.local',
+        address_line1: 'Plot #45, Industrial Area, Phase II',
+        city: 'Pune',
+        postal_code: '411018',
+        upi_vpa: 'apexwholesale@icici',
+      };
+    case 'SCHOOL':
+      return {
+        id: 'biz_school',
+        legal_name: 'Delhi Public Academy Educational Trust',
+        trade_name: 'Delhi Public Academy',
+        gstin: '27AABCS9999F1Z1',
+        state_code: '27',
+        phone: '+91 98220 54321',
+        email: 'accounts@dpa.edu.in',
+        address_line1: 'Campus Rd, Model Colony',
+        city: 'Pune',
+        postal_code: '411016',
+        upi_vpa: 'dpa.fees@sbi',
+      };
+    case 'HOSPITAL':
+      return {
+        id: 'biz_hospital',
+        legal_name: 'Apex Medicare Multi-Speciality Healthcare Ltd',
+        trade_name: 'Apex Medicare Hospital',
+        gstin: '27AABCH4444F1Z3',
+        state_code: '27',
+        phone: '+91 98220 99887',
+        email: 'billing@apexmedicare.org',
+        address_line1: 'Survey #88, Hospital Boulevard',
+        city: 'Pune',
+        postal_code: '411004',
+        upi_vpa: 'apexmedicare@hdfc',
+      };
+    case 'RETAIL':
+    default:
+      return DEFAULT_BUSINESS_PROFILE;
+  }
+};
+
+export const getInitialProductsForVertical = (vertical: BusinessType): ResourceItem[] => {
+  switch (vertical) {
+    case 'WHOLESALE':
+      return [
+        {
+          id: 'res_w1',
+          sku: 'RICE-50KG',
+          barcode: '8901234567890',
+          name: 'Daawat Rozana Basmati Rice (50kg Bag)',
+          hsn: '1006',
+          unit: 'bag',
+          tax_rate_bps: 500,
+          base_price_paise: 385000,
+          cost_price_paise: 340000,
+          stock_milli: 150000,
+        },
+        {
+          id: 'res_w2',
+          sku: 'OIL-15L',
+          barcode: '8902345678901',
+          name: 'Fortune Sunlite Refined Sunflower Oil (15L Tin)',
+          hsn: '1512',
+          unit: 'tin',
+          tax_rate_bps: 500,
+          base_price_paise: 185000,
+          cost_price_paise: 165000,
+          stock_milli: 80000,
+        },
+        {
+          id: 'res_w3',
+          sku: 'SUGAR-50K',
+          barcode: '8903456789012',
+          name: 'Madhur Pure & Hygienic Sugar (50kg Commercial)',
+          hsn: '1701',
+          unit: 'bag',
+          tax_rate_bps: 500,
+          base_price_paise: 210000,
+          cost_price_paise: 195000,
+          stock_milli: 120000,
+        },
+      ];
+    case 'SCHOOL':
+      return [
+        {
+          id: 'res_s1',
+          sku: 'FEE-TERM-01',
+          barcode: 'SCH-TERM1',
+          name: 'Term 1 Tuition & Curriculum Academic Fee',
+          hsn: '9992',
+          unit: 'term',
+          tax_rate_bps: 0,
+          base_price_paise: 1850000,
+          cost_price_paise: 0,
+          stock_milli: 999000,
+        },
+        {
+          id: 'res_s2',
+          sku: 'UNIFORM-SET',
+          barcode: 'SCH-UNIF-10',
+          name: 'Standard School Uniform Set (Shirt + Trouser + Tie)',
+          hsn: '6203',
+          unit: 'set',
+          tax_rate_bps: 500,
+          base_price_paise: 145000,
+          cost_price_paise: 95000,
+          stock_milli: 250000,
+        },
+        {
+          id: 'res_s3',
+          sku: 'BUS-TRANSPORT',
+          barcode: 'SCH-BUS-R1',
+          name: 'Quarterly School Bus Transport Service (Route #1)',
+          hsn: '9992',
+          unit: 'qtr',
+          tax_rate_bps: 0,
+          base_price_paise: 450000,
+          cost_price_paise: 0,
+          stock_milli: 999000,
+        },
+      ];
+    case 'HOSPITAL':
+      return [
+        {
+          id: 'res_h1',
+          sku: 'CONSULT-OPD',
+          barcode: 'MED-CONS-01',
+          name: 'General OPD Doctor Consultation Slip',
+          hsn: '9993',
+          unit: 'visit',
+          tax_rate_bps: 0,
+          base_price_paise: 80000,
+          cost_price_paise: 0,
+          stock_milli: 999000,
+        },
+        {
+          id: 'res_h2',
+          sku: 'MED-DOLO-650',
+          barcode: '8901234000018',
+          name: 'Paracetamol 650mg Dolo (Strip of 15 Tab)',
+          hsn: '3004',
+          unit: 'strip',
+          tax_rate_bps: 1200,
+          base_price_paise: 3400,
+          cost_price_paise: 2200,
+          stock_milli: 85000,
+        },
+        {
+          id: 'res_h3',
+          sku: 'BED-DELUXE',
+          barcode: 'MED-BED-DX',
+          name: 'Inpatient Single Deluxe AC Room / Bed (Per Day)',
+          hsn: '9993',
+          unit: 'day',
+          tax_rate_bps: 0,
+          base_price_paise: 350000,
+          cost_price_paise: 0,
+          stock_milli: 20000,
+        },
+      ];
+    case 'RETAIL':
+    default:
+      return INITIAL_PRODUCTS;
+  }
+};
 
 class PosStorage {
-  private products: ResourceItem[];
-  private sales: CompletedSale[];
-  private businessProfile: BusinessProfile;
-  private invCounter: number;
+  private products: ResourceItem[] = [];
+  private sales: CompletedSale[] = [];
+  private businessProfile: BusinessProfile = DEFAULT_BUSINESS_PROFILE;
+  private invCounter: number = 1001;
 
   constructor() {
-    this.products = this.loadFromStorage(STORAGE_KEY_PRODUCTS, INITIAL_PRODUCTS);
-    this.sales = this.loadFromStorage(STORAGE_KEY_SALES, []);
-    this.businessProfile = this.loadFromStorage(STORAGE_KEY_PROFILE, DEFAULT_BUSINESS_PROFILE);
-    this.invCounter = this.loadFromStorage(STORAGE_KEY_INV_COUNTER, 1001);
+    this.reloadForActiveVertical();
+  }
+
+  public reloadForActiveVertical(): void {
+    const v = getActiveVertical();
+    const vKey = v.toLowerCase();
+    const defaultProfile = getInitialBusinessProfileForVertical(v);
+    const defaultProducts = getInitialProductsForVertical(v);
+
+    this.products = this.loadFromStorage(`${STORAGE_KEY_PRODUCTS}_${vKey}`, defaultProducts);
+    this.sales = this.loadFromStorage(`${STORAGE_KEY_SALES}_${vKey}`, []);
+    this.businessProfile = this.loadFromStorage(`${STORAGE_KEY_PROFILE}_${vKey}`, defaultProfile);
+    this.invCounter = this.loadFromStorage(`${STORAGE_KEY_INV_COUNTER}_${vKey}`, 1001);
+  }
+
+  private getKey(base: string): string {
+    const v = getActiveVertical().toLowerCase();
+    return `${base}_${v}`;
   }
 
   private loadFromStorage<T>(key: string, defaultVal: T): T {
@@ -200,89 +405,94 @@ class PosStorage {
 
   private saveToStorage<T>(key: string, val: T): void {
     try {
-      localStorage.setItem(key, JSON.stringify(val));
+      const valStr = JSON.stringify(val);
+      localStorage.setItem(key, valStr);
+      ErpStorageService.syncKeyToBackend(key, valStr);
     } catch (e) {
       console.warn(`Failed to save ${key} to storage:`, e);
     }
   }
 
   public getProducts(): ResourceItem[] {
-    return [...this.products];
+    const key = this.getKey(STORAGE_KEY_PRODUCTS);
+    const v = getActiveVertical();
+    return this.loadFromStorage(key, getInitialProductsForVertical(v));
   }
 
   public setProducts(products: ResourceItem[]): void {
     this.products = [...products];
-    this.saveToStorage(STORAGE_KEY_PRODUCTS, this.products);
+    this.saveToStorage(this.getKey(STORAGE_KEY_PRODUCTS), this.products);
   }
 
   public findProductByBarcodeOrSku(query: string): ResourceItem | undefined {
     const q = query.trim().toLowerCase();
-    return this.products.find(
+    return this.getProducts().find(
       (p) => p.barcode.toLowerCase() === q || p.sku.toLowerCase() === q
     );
   }
 
   public getBusinessProfile(): BusinessProfile {
-    return { ...this.businessProfile };
+    const key = this.getKey(STORAGE_KEY_PROFILE);
+    const v = getActiveVertical();
+    return this.loadFromStorage(key, getInitialBusinessProfileForVertical(v));
   }
 
   public setBusinessProfile(profile: BusinessProfile): void {
     this.businessProfile = { ...profile };
-    this.saveToStorage(STORAGE_KEY_PROFILE, this.businessProfile);
+    this.saveToStorage(this.getKey(STORAGE_KEY_PROFILE), this.businessProfile);
   }
 
   public getNextInvoiceNumber(): string {
-    const count = this.invCounter++;
-    this.saveToStorage(STORAGE_KEY_INV_COUNTER, this.invCounter);
+    const key = this.getKey(STORAGE_KEY_INV_COUNTER);
+    let count = this.loadFromStorage(key, 1001);
+    const nextCount = count + 1;
+    this.saveToStorage(key, nextCount);
     const year = new Date().getFullYear();
-    return `INV-${year}-${count.toString().padStart(5, '0')}`;
+    const prefix = getActiveVertical().slice(0, 3);
+    return `${prefix}-${year}-${count.toString().padStart(5, '0')}`;
   }
 
   public saveSale(sale: CompletedSale): void {
-    this.sales.unshift(sale);
-    this.saveToStorage(STORAGE_KEY_SALES, this.sales);
-
-    // Deduct stock in-memory
-    sale.lines.forEach((line) => {
-      const prod = this.products.find((p) => p.id === line.resource_id);
-      if (prod) {
-        prod.stock_milli = Math.max(0, prod.stock_milli - line.quantity_milli);
-      }
-    });
-    this.saveToStorage(STORAGE_KEY_PRODUCTS, this.products);
+    const salesKey = this.getKey(STORAGE_KEY_SALES);
+    const existingSales = this.loadFromStorage<CompletedSale[]>(salesKey, []);
+    existingSales.unshift(sale);
+    this.saveToStorage(salesKey, existingSales);
   }
 
   public getRecentSales(): CompletedSale[] {
-    return [...this.sales];
+    const salesKey = this.getKey(STORAGE_KEY_SALES);
+    return this.loadFromStorage<CompletedSale[]>(salesKey, []);
   }
 
   public savePurchase(purchase: {
-    supplier: string;
+    supplier?: string;
     invoice_number: string;
     invoice_date: string;
     lines: Array<{
       resource_id: string;
       quantity_milli: number;
       cost_price_paise: number;
+      sku?: string;
+      batch_number?: string;
+      expiry_date?: string;
+      mrp_paise?: number;
     }>;
   }): void {
-    // Increase stock in-memory
-    purchase.lines.forEach((line) => {
-      const prod = this.products.find((p) => p.id === line.resource_id);
-      if (prod) {
-        prod.stock_milli += line.quantity_milli;
-        prod.cost_price_paise = line.cost_price_paise;
-      }
-    });
-    this.saveToStorage(STORAGE_KEY_PRODUCTS, this.products);
-    
-    const existing = this.loadFromStorage<any[]>(STORAGE_KEY_PURCHASES, []);
+    // Record purchase voucher into ledger.
+    // Stock quantity is authoritatively managed by ErpStorageService (Item Master + FIFO lots)
+    const purKey = this.getKey(STORAGE_KEY_PURCHASES);
+    const existing = this.loadFromStorage<any[]>(purKey, []);
     existing.unshift({
       id: 'pur_' + Date.now(),
       ...purchase,
       created_at: new Date().toISOString(),
     });
-    this.saveToStorage(STORAGE_KEY_PURCHASES, existing);
+    this.saveToStorage(purKey, existing);
+  }
+
+  public getPurchases(): any[] {
+    const purKey = this.getKey(STORAGE_KEY_PURCHASES);
+    return this.loadFromStorage<any[]>(purKey, []);
   }
 }
 
@@ -292,13 +502,12 @@ export const getDbPath = (): string => {
   if (typeof window !== 'undefined') {
     const custom = localStorage.getItem('omnibill_db_path');
     if (custom) return custom;
+    const v = getActiveVertical().toLowerCase();
+    return `omnibill_${v}.db`;
   }
-  return 'omnibill.db';
+  return 'omnibill_retail.db';
 };
 
-/**
- * High-level API calls with Tauri IPC invocation and browser fallback
- */
 export async function apiGetProducts(): Promise<ResourceItem[]> {
   if (isTauri()) {
     try {
@@ -341,12 +550,19 @@ export async function apiGetBusinessProfile(): Promise<BusinessProfile> {
 export async function apiPostSale(
   sale: CompletedSale
 ): Promise<{ success: boolean; invoice_number: string; error?: string }> {
+  const saleDate = sale.invoice_date || new Date().toISOString().split('T')[0];
+  try {
+    ErpStorageService.checkPeriodLock(saleDate);
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    console.error('Period lock rejected sale post:', msg);
+    return { success: false, invoice_number: sale.invoice_number, error: msg };
+  }
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
       if (sale.payment && sale.totals.total_amount_paise > 0) {
-        // Atomic single-transaction post for invoice + tender vouchers
         const modeMap: Record<string, string> = {
           CASH: 'Cash',
           UPI: 'Upi',
@@ -415,25 +631,123 @@ export async function apiPostSale(
     } catch (err: any) {
       const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
       console.error('Tauri sales post failed:', errMsg);
-      // Return genuine failure result to alert UI
       return { success: false, invoice_number: sale.invoice_number, error: errMsg };
     }
   }
 
   posStorage.saveSale(sale);
+  try {
+    ErpStorageService.deductStock(
+      sale.lines.map((l) => ({
+        resource_id: l.resource_id,
+        sku: (l as any).sku,
+        quantity_milli: l.quantity_milli,
+        is_return: (l as any).is_return,
+      }))
+    );
+  } catch (err) {
+    console.warn('Failed to deduct stock in ErpStorageService:', err);
+  }
+
+  // Record sale in Accounting Day Book
+  try {
+    const totalTax = sale.totals.cgst_paise + sale.totals.sgst_paise + sale.totals.igst_paise;
+    const pMode: any = sale.payment?.mode === 'SPLIT' ? 'CASH' : (sale.payment?.mode || 'CASH');
+
+    // CF-16: Resolve customer party accurately from name, phone or entity master
+    let partyName = sale.customer_name?.trim();
+    let partyId = 'cust_walkin';
+    const cleanPhone = sale.customer_phone?.trim();
+
+    if (cleanPhone) {
+      try {
+        const entities = ErpStorageService.getEntities('CUSTOMER');
+        const match = entities.find((e) => e.phone === cleanPhone);
+        if (match) {
+          partyId = match.id;
+          partyName = partyName || (match as any).trade_name || match.full_name || (match as any).legal_name;
+        } else if (!partyName) {
+          partyName = `Customer (${cleanPhone})`;
+        }
+      } catch {}
+    } else if (partyName) {
+      try {
+        const entities = ErpStorageService.getEntities('CUSTOMER');
+        const match = entities.find(
+          (e) =>
+            (e.full_name && e.full_name.toLowerCase() === partyName!.toLowerCase()) ||
+            ((e as any).trade_name && (e as any).trade_name.toLowerCase() === partyName!.toLowerCase())
+        );
+        if (match) {
+          partyId = match.id;
+        }
+      } catch {}
+    }
+
+    if (!partyName) {
+      partyName = 'Walk-in Retail Customer';
+    }
+
+    ErpStorageService.addDayBookEntry({
+      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      date: sale.invoice_date || new Date().toISOString().split('T')[0],
+      voucher_number: sale.invoice_number,
+      type: 'SALE',
+      party_name: partyName,
+      party_id: partyId,
+      narration: `POS Counter Sale ${sale.invoice_number} (${sale.lines.length} lines)`,
+      payment_mode: pMode,
+      inflow_paise: sale.totals.total_amount_paise,
+      outflow_paise: 0,
+      tax_paise: totalTax,
+      net_amount_paise: sale.totals.total_amount_paise,
+    });
+
+    // CF-08: If bill has Udhaar/Customer Credit portion, record in Customer Ledger
+    const creditPaise = sale.payment?.credit_amount_paise || 0;
+    if (creditPaise > 0 && partyId !== 'cust_walkin') {
+      try {
+        ErpStorageService.recordCustomerCredit(partyId, creditPaise, sale.invoice_number);
+      } catch (err) {
+        console.warn('Failed to record customer credit ledger entry:', err);
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to append sale to Day Book:', err);
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('omnibill_catalog_sync', {
+        detail: { vertical: getActiveVertical() },
+      })
+    );
+  }
   return { success: true, invoice_number: sale.invoice_number };
 }
 
 export async function apiPostPurchase(purchase: {
-  supplier: string;
+  supplier?: string;
   invoice_number: string;
   invoice_date: string;
   lines: Array<{
     resource_id: string;
     quantity_milli: number;
     cost_price_paise: number;
+    sku?: string;
+    batch_number?: string;
+    expiry_date?: string;
+    mrp_paise?: number;
   }>;
 }): Promise<{ success: boolean; error?: string }> {
+  const purDate = purchase.invoice_date || new Date().toISOString().split('T')[0];
+  try {
+    ErpStorageService.checkPeriodLock(purDate);
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    console.error('Period lock rejected purchase post:', msg);
+    return { success: false, error: msg };
+  }
   if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -457,6 +771,55 @@ export async function apiPostPurchase(purchase: {
     }
   }
 
+  // 1. Inward directly into ErpStorageService (Item Master & Inventory Lots)
+  try {
+    ErpStorageService.inwardStock(purchase.lines);
+  } catch (err) {
+    console.warn('Failed to inward stock in ErpStorageService:', err);
+  }
+
+  // 2. Inward into posStorage (LightningPOS & purchase voucher ledger)
   posStorage.savePurchase(purchase);
+
+  // 3. Record purchase in Accounting Day Book & Trial Balance
+  const totalCostPaise = purchase.lines.reduce(
+    (sum, l) => sum + Math.round((l.quantity_milli * l.cost_price_paise) / 1000),
+    0
+  );
+  const totalUnits = purchase.lines.reduce(
+    (sum, l) => sum + Math.round(l.quantity_milli / 1000),
+    0
+  );
+  const supplierName = purchase.supplier?.trim() || 'Primary Supplier';
+
+  try {
+    ErpStorageService.addDayBookEntry({
+      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      date: purchase.invoice_date || new Date().toISOString().split('T')[0],
+      voucher_number: purchase.invoice_number,
+      type: 'PURCHASE',
+      party_name: supplierName,
+      party_id: 'supp_inward',
+      narration: `Inward Purchase ${purchase.invoice_number} (${purchase.lines.length} items / ${totalUnits} units)`,
+      payment_mode: 'CASH',
+      inflow_paise: 0,
+      outflow_paise: totalCostPaise,
+      tax_paise: 0,
+      net_amount_paise: totalCostPaise,
+    });
+    ErpStorageService.adjustTrialBalanceForPurchase(totalCostPaise);
+  } catch (err) {
+    console.warn('Failed to record purchase in Day Book / Trial Balance:', err);
+  }
+
+  // 3. Dispatch global catalog sync so all open components (F3, F10, POS) refresh immediately
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('omnibill_catalog_sync', {
+        detail: { vertical: getActiveVertical() },
+      })
+    );
+  }
+
   return { success: true };
 }

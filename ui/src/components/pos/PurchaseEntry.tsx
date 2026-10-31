@@ -30,6 +30,7 @@ import {
   formatMilliQty,
 } from '../../lib/tax';
 import { apiPostPurchase, posStorage } from '../../lib/api';
+import { ErpStorageService } from '../../lib/erpStorage';
 import { posSound } from '../../lib/sound';
 import {
   PurchaseExpenseBillModal,
@@ -112,8 +113,31 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
     } catch {}
   }, [savedVouchers]);
 
+  useEffect(() => {
+    const handleSync = () => {
+      onRefreshProducts();
+    };
+    window.addEventListener('omnibill_catalog_sync', handleSync);
+    return () => {
+      window.removeEventListener('omnibill_catalog_sync', handleSync);
+    };
+  }, [onRefreshProducts]);
+
+  useEffect(() => {
+    if ((!selectedProductId || !products.some((p) => p.id === selectedProductId)) && products.length > 0) {
+      setSelectedProductId(products[0].id);
+      setCostInput((products[0].cost_price_paise / 100).toFixed(2));
+    }
+  }, [products, selectedProductId]);
+
   // Selected product lookup
-  const selectedProd = products.find((p) => p.id === selectedProductId);
+  const selectedProd = products.find((p) => p.id === selectedProductId) || products[0];
+
+  useEffect(() => {
+    if (selectedProd && !costInput) {
+      setCostInput((selectedProd.cost_price_paise / 100).toFixed(2));
+    }
+  }, [selectedProd]);
 
   // Filter products for dropdown
   const filteredProducts = useMemo(() => {
@@ -128,22 +152,23 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
   }, [products, searchProductQuery]);
 
   const handleAddLine = () => {
-    if (!selectedProd) return;
+    const targetProd = selectedProd || filteredProducts[0] || products[0];
+    if (!targetProd) return;
     const qMilli = parseQtyToMilli(qtyInput);
     if (qMilli <= 0) {
       alert('Please enter a valid quantity greater than zero');
       return;
     }
 
-    const cPaise = costInput ? parseRupeesToPaise(costInput) : selectedProd.cost_price_paise;
+    const cPaise = costInput ? parseRupeesToPaise(costInput) : targetProd.cost_price_paise;
 
     setLines((prev) => [
       ...prev,
       {
-        resource_id: selectedProd.id,
-        product_name: selectedProd.name,
-        sku: selectedProd.sku,
-        unit: selectedProd.unit,
+        resource_id: targetProd.id,
+        product_name: targetProd.name,
+        sku: targetProd.sku,
+        unit: targetProd.unit,
         quantity_milli: qMilli,
         cost_price_paise: cPaise,
       },
@@ -175,28 +200,39 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
     const sku = newProdSku.trim().toUpperCase() || `SKU-${Date.now().toString().slice(-4)}`;
     const barcode = newProdBarcode.trim() || `890${Date.now().toString().slice(-10)}`;
 
-    const newProd: ResourceItem = {
-      id: 'res_' + Date.now(),
-      sku,
-      barcode,
-      name: newProdName.trim(),
-      hsn: '9999',
-      unit: newProdUnit,
-      tax_rate_bps: newProdTaxBps,
-      base_price_paise: basePricePaise,
-      cost_price_paise: costPricePaise,
-      stock_milli: 0,
-    };
+    let createdId = '';
+    // 1. Add to ErpStorageService (Item Master & Inventory Lots)
+    try {
+      const created = ErpStorageService.addItem({
+        sku,
+        barcode,
+        name: newProdName.trim(),
+        hsn_sac: '9999',
+        unit: newProdUnit,
+        tax_rate_bps: newProdTaxBps,
+        base_price_paise: basePricePaise,
+        cost_price_paise: costPricePaise,
+        is_stock_tracked: true,
+        reorder_level_milli: 5000,
+        category: 'General',
+        initial_stock_milli: 0,
+      });
+      createdId = created.id;
+    } catch (e) {
+      console.warn('Failed to add item to ErpStorageService:', e);
+    }
 
-    const currentProds = posStorage.getProducts();
-    posStorage.setProducts([newProd, ...currentProds]);
+    // 2. Refresh products list
     onRefreshProducts();
 
-    // Select the new product automatically
-    setSelectedProductId(newProd.id);
+    // Select the new product automatically using authoritative ID
+    if (createdId) {
+      setSelectedProductId(createdId);
+    }
     setCostInput((costPricePaise / 100).toFixed(2));
     setIsCreateProductModalOpen(false);
 
+    const createdName = newProdName.trim();
     // Reset form
     setNewProdName('');
     setNewProdSku('');
@@ -205,7 +241,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
     setNewProdCostPrice('');
 
     posSound.playSuccess();
-    alert(`Added "${newProd.name}" to catalog! You can now inward its stock.`);
+    alert(`Added "${createdName}" to catalog! You can now inward its stock.`);
   };
 
   // Submit Purchase, Update Stock, and Generate Expense Bill
@@ -219,6 +255,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
         invoice_date: businessDate,
         lines: lines.map((l) => ({
           resource_id: l.resource_id,
+          sku: l.sku,
           quantity_milli: l.quantity_milli,
           cost_price_paise: l.cost_price_paise,
         })),
@@ -549,10 +586,10 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
                             {formatMilliQty(l.quantity_milli)} {l.unit}
                           </td>
                           <td className="py-2 px-3 text-right font-mono text-slate-300">
-                            ₹{formatPaise(l.cost_price_paise)}
+                            {formatPaise(l.cost_price_paise)}
                           </td>
                           <td className="py-2 px-3 text-right font-mono font-bold text-emerald-400">
-                            ₹{formatPaise(lineTotal)}
+                            {formatPaise(lineTotal)}
                           </td>
                           <td className="py-2 px-3 text-center">
                             <button
@@ -577,7 +614,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
               <div>
                 <span className="text-xs text-slate-400 mr-2">Total Inward Purchase Expense:</span>
                 <span className="text-xl font-black font-mono text-emerald-400">
-                  ₹{formatPaise(totalCostPaise)}
+                  {formatPaise(totalCostPaise)}
                 </span>
                 <span className="text-xs text-slate-500 ml-2">({lines.length} items)</span>
               </div>
@@ -615,7 +652,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
             <div className="text-right">
               <span className="text-xs text-slate-400">Total Purchase Outflow:</span>
               <span className="text-base font-bold text-emerald-400 font-mono ml-2">
-                ₹{formatPaise(totalPurchasesCostPaise)}
+                {formatPaise(totalPurchasesCostPaise)}
               </span>
             </div>
           </div>
@@ -651,7 +688,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">
-                        ₹{formatPaise(v.totalExpensePaise)}
+                        {formatPaise(v.totalExpensePaise)}
                       </td>
                       <td className="py-2.5 px-3 text-center">
                         <button
@@ -687,7 +724,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
                 <DollarSign className="w-4 h-4 text-blue-400" />
               </div>
               <div className="text-2xl font-black text-blue-400 font-mono mt-1">
-                ₹{formatPaise(totalSalesRevenuePaise)}
+                {formatPaise(totalSalesRevenuePaise)}
               </div>
               <div className="text-[11px] text-slate-500 mt-1">
                 {salesHistory.length} completed counter sales
@@ -701,7 +738,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
                 <Truck className="w-4 h-4 text-amber-400" />
               </div>
               <div className="text-2xl font-black text-amber-400 font-mono mt-1">
-                ₹{formatPaise(totalPurchasesCostPaise)}
+                {formatPaise(totalPurchasesCostPaise)}
               </div>
               <div className="text-[11px] text-slate-500 mt-1">
                 {savedVouchers.length} stock inward purchase bills
@@ -715,7 +752,7 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
                 <TrendingUp className="w-4 h-4 text-emerald-400" />
               </div>
               <div className={`text-2xl font-black font-mono mt-1 ${grossProfitPaise >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                ₹{formatPaise(Math.abs(grossProfitPaise))}
+                {formatPaise(Math.abs(grossProfitPaise))}
                 {grossProfitPaise < 0 && ' (Deficit)'}
               </div>
               <div className="text-[11px] text-slate-500 mt-1">
@@ -752,21 +789,21 @@ export const PurchaseEntry: React.FC<PurchaseEntryProps> = ({
               <div className="space-y-1">
                 <span className="text-slate-500 text-[11px]">Total Realized Inflow</span>
                 <div className="font-bold text-white font-mono text-sm">
-                  ₹{formatPaise(totalSalesRevenuePaise)}
+                  {formatPaise(totalSalesRevenuePaise)}
                 </div>
                 <div className="text-[10px] text-slate-400">Cash, UPI & Card sales</div>
               </div>
               <div className="space-y-1">
                 <span className="text-slate-500 text-[11px]">Total Stock Acquisition Cost</span>
                 <div className="font-bold text-amber-400 font-mono text-sm">
-                  ₹{formatPaise(totalPurchasesCostPaise)}
+                  {formatPaise(totalPurchasesCostPaise)}
                 </div>
                 <div className="text-[10px] text-slate-400">Total inward purchase expenses</div>
               </div>
               <div className="space-y-1">
                 <span className="text-slate-500 text-[11px]">Net Commercial Surplus</span>
                 <div className="font-bold text-emerald-400 font-mono text-sm">
-                  ₹{formatPaise(grossProfitPaise)}
+                  {formatPaise(grossProfitPaise)}
                 </div>
                 <div className="text-[10px] text-slate-400">Spread earned on sold products</div>
               </div>

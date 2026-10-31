@@ -84,7 +84,7 @@ export const HeldBillsModal: React.FC<HeldBillsModalProps> = ({
                     <span>{bill.items.length} Items</span>
                     <span>•</span>
                     <span className="font-mono text-emerald-400 font-bold">
-                      ₹{formatPaise(bill.subtotalPaise)}
+                      {formatPaise(bill.subtotalPaise)}
                     </span>
                   </div>
 
@@ -96,17 +96,21 @@ export const HeldBillsModal: React.FC<HeldBillsModalProps> = ({
 
                 <div className="flex items-center space-x-2 shrink-0">
                   <button
+                    type="button"
                     onClick={() => onRecallBill(bill)}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-md shadow-emerald-600/20"
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-md shadow-emerald-600/20 focus-ring"
+                    aria-label={`Recall parked bill for ${bill.customerName || 'customer'}, subtotal ${formatPaise(bill.subtotalPaise)}`}
                   >
                     <PlayCircle className="w-3.5 h-3.5" />
                     <span>Recall Bill</span>
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => onDiscardBill(bill.id)}
-                    className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition cursor-pointer"
+                    className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition cursor-pointer focus-ring"
                     title="Discard held bill"
+                    aria-label="Discard held bill"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>

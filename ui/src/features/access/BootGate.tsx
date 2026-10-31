@@ -101,14 +101,19 @@ export const BootGate: React.FC<BootGateProps> = ({ children }) => {
   }, []);
 
   const handleLoginSuccess = (token: string, user: AuthenticatedUser) => {
+    const activeV =
+      (typeof window !== 'undefined' ? localStorage.getItem('omnibill_active_vertical') : null) ||
+      bootState?.vertical ||
+      'retail';
     const newSession: ClientSession = {
       token,
       user,
-      vertical: bootState?.vertical || 'retail',
+      vertical: activeV.toLowerCase(),
     };
     setSession(newSession);
     try {
       localStorage.setItem('omnibill_access_session', JSON.stringify(newSession));
+      localStorage.setItem('omnibill_access_token', token);
     } catch {}
 
     if (user.must_change_password) {
@@ -145,6 +150,8 @@ export const BootGate: React.FC<BootGateProps> = ({ children }) => {
     setAccessStatus(null);
     try {
       localStorage.removeItem('omnibill_access_session');
+      localStorage.removeItem('omnibill_active_session');
+      localStorage.removeItem('omnibill_active_vertical');
     } catch {}
     setView('login');
   };

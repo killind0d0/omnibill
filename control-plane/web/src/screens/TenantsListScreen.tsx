@@ -4,6 +4,7 @@ import { TenantSummary } from '../types';
 import { formatCivilDate, formatTimestamp } from '../utils/format';
 import { StatusChip } from '../components/StatusChip';
 import { NewBusinessWizardModal } from './NewBusinessWizardModal';
+import { GithubSyncService } from '../utils/githubService';
 
 interface TenantsListScreenProps {
   onSelectTenant: (tenantId: string) => void;
@@ -18,6 +19,8 @@ export const TenantsListScreen: React.FC<TenantsListScreenProps> = ({
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
   const loadTenants = async () => {
     setLoading(true);
@@ -39,6 +42,79 @@ export const TenantsListScreen: React.FC<TenantsListScreenProps> = ({
   useEffect(() => {
     loadTenants();
   }, []);
+
+  const handleDownloadLicenseJson = (e: React.MouseEvent, t: TenantSummary) => {
+    e.stopPropagation();
+    const cleanKey = t.business_name
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    const d = new Date(t.valid_until_day * 86400 * 1000);
+    const isoDate = d.toISOString().split('T')[0];
+    const payload = {
+      version: 1,
+      license_key: cleanKey,
+      tenant_id: t.id,
+      business_name: t.business_name,
+      gstin: '27AABCR1234D1Z5',
+      vertical: t.vertical,
+      plan: t.plan,
+      max_counters: t.max_counters,
+      valid_until: isoDate,
+      valid_until_day: t.valid_until_day,
+      status: t.status,
+      support_contact: '+91 98765 43210 • dev@omnibill.com',
+      issued_ms: Date.now(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${cleanKey}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handlePushToGithub = async (e: React.MouseEvent, t: TenantSummary) => {
+    e.stopPropagation();
+    const cleanKey = t.business_name
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    const d = new Date(t.valid_until_day * 86400 * 1000);
+    const isoDate = d.toISOString().split('T')[0];
+    const payload = {
+      version: 1,
+      license_key: cleanKey,
+      tenant_id: t.id,
+      business_name: t.business_name,
+      gstin: '27AABCR1234D1Z5',
+      vertical: t.vertical,
+      plan: t.plan,
+      max_counters: t.max_counters,
+      valid_until: isoDate,
+      valid_until_day: t.valid_until_day,
+      status: t.status,
+      support_contact: '+91 98765 43210 • dev@omnibill.com',
+      issued_ms: Date.now(),
+    };
+
+    setSyncingId(t.id);
+    setSyncFeedback(null);
+    try {
+      const res = await GithubSyncService.pushLicense(cleanKey, payload);
+      if (res.ok) {
+        setSyncFeedback(`✅ Published licenses/${cleanKey}.json to GitHub!`);
+      } else {
+        setSyncFeedback(`❌ ${res.message}`);
+      }
+    } finally {
+      setSyncingId(null);
+      setTimeout(() => setSyncFeedback(null), 6000);
+    }
+  };
 
   const filteredTenants = tenants.filter((t) => {
     const matchesSearch =
@@ -79,6 +155,18 @@ export const TenantsListScreen: React.FC<TenantsListScreenProps> = ({
           <span>Provision Business</span>
         </button>
       </div>
+
+      {syncFeedback && (
+        <div
+          className={`p-3 rounded-xl border text-xs font-semibold ${
+            syncFeedback.startsWith('✅')
+              ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+              : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+          }`}
+        >
+          {syncFeedback}
+        </div>
+      )}
 
       {error && (
         <div className="p-3 bg-red-950/60 border border-red-800/60 rounded-lg text-red-300 text-sm">
@@ -129,18 +217,19 @@ export const TenantsListScreen: React.FC<TenantsListScreenProps> = ({
                 <th className="px-5 py-3.5 font-medium">Status</th>
                 <th className="px-5 py-3.5 font-medium">Counters</th>
                 <th className="px-5 py-3.5 font-medium">Last Check-in</th>
+                <th className="px-5 py-3.5 font-medium text-right">License JSON</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center text-slate-500">
+                  <td colSpan={8} className="px-5 py-12 text-center text-slate-500">
                     Loading tenants database...
                   </td>
                 </tr>
               ) : filteredTenants.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center text-slate-500">
+                  <td colSpan={8} className="px-5 py-12 text-center text-slate-500">
                     No tenants match your search criteria.
                   </td>
                 </tr>
@@ -180,6 +269,27 @@ export const TenantsListScreen: React.FC<TenantsListScreenProps> = ({
                     </td>
                     <td className="px-5 py-4 text-xs text-slate-400 font-mono">
                       {formatTimestamp(t.last_checkin_ms)}
+                    </td>
+                    <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => handlePushToGithub(e, t)}
+                          disabled={syncingId === t.id}
+                          className="px-2.5 py-1 bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white rounded-lg border border-indigo-500/40 text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title={`Commit & push ${t.business_name} license directly to GitHub`}
+                        >
+                          <span>{syncingId === t.id ? 'Pushing...' : '🚀 GitHub'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDownloadLicenseJson(e, t)}
+                          className="px-2.5 py-1 bg-blue-600/30 hover:bg-blue-600 text-blue-200 hover:text-white rounded-lg border border-blue-500/40 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                          title={`Download ${t.business_name} license.json for GitHub or offline activation`}
+                        >
+                          <span>📥 JSON</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

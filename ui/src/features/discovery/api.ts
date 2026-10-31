@@ -2,7 +2,28 @@
 // Thin IPC bridge for Product Discovery Hub with monotonic request sequencing
 
 import { DiscoveryPage, DiscoveryQuery, Facets } from './types';
-import { getDbPath } from '../../lib/api';
+import { getDbPath, getActiveVertical } from '../../lib/api';
+
+const getHeaders = (vertical?: string): Record<string, string> => {
+  const v = (vertical || getActiveVertical()).toLowerCase();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Vertical': v,
+    'X-Business-Type': v.toUpperCase(),
+  };
+  if (typeof window !== 'undefined') {
+    try {
+      const sess = localStorage.getItem('omnibill_access_session');
+      if (sess) {
+        const parsed = JSON.parse(sess);
+        if (parsed.token) {
+          headers['Authorization'] = `Bearer ${parsed.token}`;
+        }
+      }
+    } catch {}
+  }
+  return headers;
+};
 
 const isTauriRuntime = (): boolean =>
   typeof window !== 'undefined' &&
@@ -43,7 +64,7 @@ export async function fetchDiscoveryProducts(
   } else {
     const res = await fetch('http://127.0.0.1:4000/api/discovery/products', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(vertical),
       body: JSON.stringify({ query, vertical: vertical || 'retail' }),
     });
     if (!res.ok) {
@@ -81,7 +102,7 @@ export async function fetchDiscoveryFacets(
   } else {
     const res = await fetch('http://127.0.0.1:4000/api/discovery/facets', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(vertical),
       body: JSON.stringify({ query, vertical: vertical || 'retail' }),
     });
     if (!res.ok) {
@@ -116,7 +137,7 @@ export async function triggerRefreshAnalytics(today?: number): Promise<{
 
   const res = await fetch('http://127.0.0.1:4000/api/discovery/refresh', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(),
     body: JSON.stringify({ today }),
   });
   if (!res.ok) {
@@ -149,7 +170,7 @@ export async function exportDiscoveryProducts(
 
   const res = await fetch('http://127.0.0.1:4000/api/discovery/export', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(vertical),
     body: JSON.stringify({ query, vertical: vertical || 'retail', today, outDir }),
   });
   if (!res.ok) {
@@ -177,7 +198,7 @@ export async function fetchDaySummaryText(
 
   const res = await fetch('http://127.0.0.1:4000/api/discovery/day_summary', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(vertical),
     body: JSON.stringify({ vertical: vertical || 'retail', day }),
   });
   if (!res.ok) {

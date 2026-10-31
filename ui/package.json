@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node tests/tax.test.mjs && node tests/verticals.test.mjs && node tests/format.test.mjs && node tests/sellgraph_isolation.test.mjs",
+    "test": "node tests/tax.test.mjs && node tests/verticals.test.mjs && node tests/format.test.mjs && node tests/sellgraph_isolation.test.mjs && node tests/numbersToWords.test.mjs && node tests/whatsapp_reminders.test.mjs && node tests/database_isolation.test.mjs && node tests/webrtc_support.test.mjs && node tests/catalog_sync.test.mjs && node tests/stock_inward_inventory_audit.test.mjs && node tests/field_trial_cf_fixes.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

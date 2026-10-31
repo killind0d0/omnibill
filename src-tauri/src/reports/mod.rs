@@ -179,6 +179,8 @@ pub fn get_trial_balance(conn: &Connection) -> Result<TrialBalanceReport, Report
             SUM(l.credit_paise) AS total_credit
          FROM ledger_entries l
          JOIN accounts a ON l.account_id = a.id
+         LEFT JOIN transactions t ON l.transaction_id = t.id
+         WHERE (l.transaction_id IS NULL OR t.status = 'POSTED')
          GROUP BY a.id, a.code, a.name, a.type
          ORDER BY a.code ASC",
     )?;
@@ -1149,7 +1151,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                'tx_purchase_1', 'POSTED', '27', '27', 'PUR/26-27/',
+                'tx_purchase_1', 'DRAFT', '27', '27', 'PUR/26-27/',
                 'PUR/26-27/0001', 'ent_supp', 480000, 0, 480000,
                 0, 0, 0, 0, 480000,
                 'PURCHASE', NULL, '2026-04-15', 'usr_admin'
@@ -1173,6 +1175,12 @@ mod tests {
             [],
         )
         .expect("Seed purchase ledger credit");
+
+        conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_purchase_1'",
+            [],
+        )
+        .expect("Post purchase transaction");
 
         conn
     }
@@ -1291,6 +1299,10 @@ mod tests {
         )
         .unwrap();
 
+        // Temporarily drop gateway triggers to simulate corruption and test detection
+        conn.execute("DROP TRIGGER IF EXISTS trg_transactions_no_direct_posted_insert", []).unwrap();
+        conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_insert_only_on_draft", []).unwrap();
+
         conn.execute(
             "INSERT INTO transactions (
                 id, status, seller_state_code, place_of_supply_state_code, series,
@@ -1386,7 +1398,7 @@ mod tests {
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
             ) VALUES (
-                'tx_purchase_today', 'POSTED', '27', '27', 'PUR/26-27/',
+                'tx_purchase_today', 'DRAFT', '27', '27', 'PUR/26-27/',
                 'PUR/26-27/0099', 'ent_supp', 200000, 0, 200000,
                 0, 0, 0, 0, 200000,
                 'PURCHASE', NULL, ?1, 'usr_admin'
@@ -1394,6 +1406,22 @@ mod tests {
             params![&today],
         )
         .expect("Seed purchase on today's date");
+
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('le_td_1', 'tx_purchase_today', NULL, 'acc_1200', 200000, 0, 'Inventory')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO ledger_entries (id, transaction_id, payment_id, account_id, debit_paise, credit_paise, narration)
+             VALUES ('le_td_2', 'tx_purchase_today', NULL, 'acc_2000', 0, 200000, 'Accounts Payable')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_purchase_today'",
+            [],
+        ).unwrap();
 
         // Query Day Book for today
         let day_book = get_day_book(&conn, &today).expect("Get Day Book");

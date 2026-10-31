@@ -9,9 +9,11 @@ import {
   WholesaleInvoiceRecord,
   PaymentMode,
   WholesaleStockItem,
+  CustomerCreditSummary,
 } from './types';
 import { PurchaseExpenseVoucher } from '../components/common/PurchaseExpenseBillModal';
 import { formatPaise } from '../lib/tax';
+import { ErpStorageService } from '../lib/erpStorage';
 
 // ----------------------------------------------------------------------------
 // 1. SEEDED B2B WHOLESALE CUSTOMERS DIRECTORY (20 VERIFIED PARTIES)
@@ -582,77 +584,69 @@ export const DEFAULT_WHOLESALE_INVOICE_SETTINGS: WholesaleInvoiceSettings = {
 };
 
 // ----------------------------------------------------------------------------
-// 5. SEEDED RECENT WHOLESALE INVOICE AUDIT LOGS
+// 5. SEEDED RECENT WHOLESALE INVOICE AUDIT LOGS (50 REALISTIC B2B TAX INVOICES)
 // ----------------------------------------------------------------------------
-export const INITIAL_WHOLESALE_INVOICES: WholesaleInvoiceRecord[] = [
-  {
-    id: 'wh_inv_001',
-    invoice_number: 'B2B-2026-4401',
-    date: '2026-10-21',
-    customer_id: 'ent_b2b_001',
-    customer_name: 'Metro MegaMart Distributors Pvt Ltd',
-    customer_gstin: '27AABCU9603R1ZM',
-    state_code: '27',
-    is_interstate: false,
-    subtotal_paise: 8850000,
-    discount_paise: 350000,
-    cgst_paise: 425000,
-    sgst_paise: 425000,
-    igst_paise: 0,
-    round_off_paise: 0,
-    total_paise: 9350000,
-    eway_bill_no: '281900412891',
-    vehicle_number: 'MH-12-QW-4412',
-    payment_mode: 'BANK_TRANSFER',
-    payment_status: 'PAID',
-    due_date: '2026-11-20',
-    staff_name: 'Manager S. Rathore',
-  },
-  {
-    id: 'wh_inv_002',
-    invoice_number: 'B2B-2026-4402',
-    date: '2026-10-21',
-    customer_id: 'ent_b2b_003',
-    customer_name: 'Bharat Wholesale Agencies (New Delhi)',
-    customer_gstin: '07AAAAA0000A1Z5',
-    state_code: '07',
-    is_interstate: true,
-    subtotal_paise: 12500000,
-    discount_paise: 500000,
-    cgst_paise: 0,
-    sgst_paise: 0,
-    igst_paise: 1200000,
-    round_off_paise: 0,
-    total_paise: 13200000,
-    eway_bill_no: '281900413004',
-    vehicle_number: 'DL-01-AB-9812',
-    payment_mode: 'BANK_TRANSFER',
-    payment_status: 'CREDIT',
-    due_date: '2026-12-05',
-    staff_name: 'Logistics Head Verma',
-  },
-  {
-    id: 'wh_inv_003',
-    invoice_number: 'B2B-2026-4403',
-    date: '2026-10-20',
-    customer_id: 'ent_b2b_002',
-    customer_name: 'Apex Supermarket & Retail Traders',
-    customer_gstin: '27AADCA3412B1Z8',
-    state_code: '27',
-    is_interstate: false,
-    subtotal_paise: 4400000,
-    discount_paise: 150000,
-    cgst_paise: 212500,
-    sgst_paise: 212500,
-    igst_paise: 0,
-    round_off_paise: 0,
-    total_paise: 4675000,
-    payment_mode: 'UPI',
-    payment_status: 'PAID',
-    due_date: '2026-11-04',
-    staff_name: 'Billing Exec Kulkarni',
-  },
-];
+const generateSeeded50WholesaleInvoices = (): WholesaleInvoiceRecord[] => {
+  const buyers = [
+    { name: 'Metro MegaMart Distributors Pvt Ltd', gstin: '27AABCU9603R1ZM', state: '27', isInter: false },
+    { name: 'Apex Supermarket & Retail Traders', gstin: '27AADCA3412B1Z8', state: '27', isInter: false },
+    { name: 'Kalyan Kirana Wholesale Mart', gstin: '27AABCU1003R1ZM', state: '27', isInter: false },
+    { name: 'Bharat Wholesale Agencies (New Delhi)', gstin: '07AAAAA0000A1Z5', state: '07', isInter: true },
+    { name: 'Shree Ganesh FMCG Traders Surat', gstin: '24AABCU1004R1ZM', state: '24', isInter: true },
+    { name: 'Vardhman Provision Stores Pune', gstin: '27AABCU1005R1ZM', state: '27', isInter: false },
+    { name: 'City Retail Supermarket Chain', gstin: '27AABCC8899K1Z4', state: '27', isInter: false },
+  ];
+  const list: WholesaleInvoiceRecord[] = [];
+  const nowMs = Date.now();
+
+  for (let i = 1; i <= 50; i++) {
+    const invNo = `INV-WHS-2026-${String(i).padStart(4, '0')}`;
+    const buyer = buyers[(i - 1) % buyers.length];
+    const sacks = (i % 8) + 6;
+    const ratePaise = 125000;
+    const taxablePaise = sacks * ratePaise;
+    const taxPaise = Math.round((taxablePaise * 5) / 100);
+    const totalPaise = taxablePaise + taxPaise;
+    const isEway = totalPaise >= 5000000;
+
+    // Distribute invoice dates realistically:
+    // Recent (0-30 days): i % 3 === 0
+    // Overdue (31-60 days): i % 3 === 1
+    // Critical Overdue (>60 days): i % 3 === 2
+    const daysAgo = (i % 3 === 0) ? (i % 25) + 2 : (i % 3 === 1) ? 35 + (i % 20) : 65 + (i % 25);
+    const invDateObj = new Date(nowMs - daysAgo * 86400000);
+    const invDate = invDateObj.toISOString().split('T')[0];
+    const dueDateObj = new Date(invDateObj.getTime() + 30 * 86400000);
+    const dueDate = dueDateObj.toISOString().split('T')[0];
+
+    list.push({
+      id: `wh_inv_seed_${i}`,
+      invoice_number: invNo,
+      date: invDate,
+      customer_id: `ent_b2b_${((i - 1) % buyers.length) + 1}`,
+      customer_name: buyer.name,
+      customer_gstin: buyer.gstin,
+      state_code: buyer.state,
+      is_interstate: buyer.isInter,
+      subtotal_paise: taxablePaise,
+      discount_paise: 0,
+      cgst_paise: buyer.isInter ? 0 : Math.round(taxPaise / 2),
+      sgst_paise: buyer.isInter ? 0 : Math.round(taxPaise / 2),
+      igst_paise: buyer.isInter ? taxPaise : 0,
+      round_off_paise: 0,
+      total_paise: totalPaise,
+      eway_bill_no: isEway ? `28190041${String(1000 + i)}` : undefined,
+      vehicle_number: isEway ? `MH-12-WS-${String(1000 + i)}` : undefined,
+      payment_mode: i % 2 === 0 ? 'BANK_TRANSFER' : 'CASH',
+      payment_status: i % 2 === 0 ? 'CREDIT' : 'PAID',
+      due_date: dueDate,
+      staff_name: 'B2B Sales Desk',
+    });
+  }
+  return list;
+};
+
+export const INITIAL_WHOLESALE_INVOICES: WholesaleInvoiceRecord[] = generateSeeded50WholesaleInvoices();
 
 // ----------------------------------------------------------------------------
 // 5.5 SEEDED WHOLESALE INVENTORY & BULK GOODS STOCK (15 TRADE COMMODITIES)
@@ -886,6 +880,85 @@ export class WholesaleDataService {
     return updated;
   }
 
+  /**
+   * B2B Credit Aging & Risk Assessment Service
+   * Calculates live credit limit utilization, outstanding balance, and overdue aging buckets (0-30, 31-60, 60+ days)
+   */
+  static getCustomerCreditSummary(customerId: string): CustomerCreditSummary {
+    const customers = this.getCustomers();
+    const customer = customers.find((c) => c.id === customerId);
+    const invoices = this.getInvoices().filter((inv) => inv.customer_id === customerId);
+
+    const creditLimitPaise = customer?.credit_limit_paise || 0;
+    const currentBalancePaise = customer?.current_balance_paise || 0;
+
+    const now = new Date();
+    let current030Paise = 0;
+    let overdue3160Paise = 0;
+    let criticalOverdue60PlusPaise = 0;
+
+    // Filter unpaid/credit invoices
+    const creditInvoices = invoices.filter(
+      (inv) => inv.payment_mode === 'BANK_TRANSFER' || inv.payment_status === 'CREDIT'
+    );
+
+    if (creditInvoices.length > 0) {
+      creditInvoices.forEach((inv) => {
+        const invDate = new Date(inv.date);
+        const diffMs = now.getTime() - invDate.getTime();
+        const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+
+        if (diffDays <= 30) {
+          current030Paise += inv.total_paise;
+        } else if (diffDays <= 60) {
+          overdue3160Paise += inv.total_paise;
+        } else {
+          criticalOverdue60PlusPaise += inv.total_paise;
+        }
+      });
+    } else if (currentBalancePaise > 0) {
+      // Allocate ledger balance across buckets by realistic credit terms
+      current030Paise = Math.round(currentBalancePaise * 0.6);
+      overdue3160Paise = Math.round(currentBalancePaise * 0.3);
+      criticalOverdue60PlusPaise = currentBalancePaise - current030Paise - overdue3160Paise;
+    }
+
+    const totalOutstandingPaise = Math.max(
+      currentBalancePaise,
+      current030Paise + overdue3160Paise + criticalOverdue60PlusPaise
+    );
+    const availableCreditPaise = Math.max(0, creditLimitPaise - totalOutstandingPaise);
+    const creditUtilizationPct =
+      creditLimitPaise > 0
+        ? Math.min(100, Math.round((totalOutstandingPaise / creditLimitPaise) * 100))
+        : 0;
+
+    const isOverLimit = totalOutstandingPaise > creditLimitPaise;
+    const hasCriticalOverdue = criticalOverdue60PlusPaise > 0;
+
+    let creditRiskLevel: 'SAFE' | 'WARNING' | 'BLOCKED' = 'SAFE';
+    if (isOverLimit || hasCriticalOverdue) {
+      creditRiskLevel = 'BLOCKED';
+    } else if (creditUtilizationPct > 80 || overdue3160Paise > 0) {
+      creditRiskLevel = 'WARNING';
+    }
+
+    return {
+      customer_id: customerId,
+      customer_name: customer ? customer.trade_name || customer.full_name : 'Unknown Customer',
+      credit_limit_paise: creditLimitPaise,
+      total_outstanding_paise: totalOutstandingPaise,
+      available_credit_paise: availableCreditPaise,
+      current_0_30_paise: current030Paise,
+      overdue_31_60_paise: overdue3160Paise,
+      critical_overdue_60_plus_paise: criticalOverdue60PlusPaise,
+      credit_utilization_pct: creditUtilizationPct,
+      is_over_limit: isOverLimit,
+      has_critical_overdue: hasCriticalOverdue,
+      credit_risk_level: creditRiskLevel,
+    };
+  }
+
   // Pricing Rules
   static getPricingRules(): WholesalePricingRule[] {
     try {
@@ -957,7 +1030,10 @@ export class WholesaleDataService {
   static getInvoices(): WholesaleInvoiceRecord[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.INVOICES);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length >= 50) return parsed;
+      }
     } catch (e) {
       console.warn('Failed to parse wholesale invoices:', e);
     }
@@ -1077,6 +1153,32 @@ export class WholesaleDataService {
     });
 
     this.saveWholesaleStock(stock);
+
+    // Also inward to ErpStorageService (Item Master & Inventory Lots)
+    try {
+      ErpStorageService.inwardStock(
+        purchase.lines.map((l) => {
+          const item = stock.find((s) => s.id === l.itemId);
+          return {
+            resource_id: l.itemId,
+            sku: item?.sku,
+            name: item?.name,
+            quantity_milli: l.quantity * 1000,
+            cost_price_paise: l.purchaseRatePaise,
+          };
+        })
+      );
+    } catch (e) {
+      console.warn('Failed to inward wholesale stock to ErpStorageService:', e);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('omnibill_catalog_sync', {
+          detail: { vertical: 'WHOLESALE' },
+        })
+      );
+    }
 
     const settings = this.getInvoiceSettings();
     const voucher: PurchaseExpenseVoucher = {

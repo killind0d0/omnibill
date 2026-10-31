@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { AdminMe } from './types';
+import { AdminMe, TenantSummary } from './types';
 import { apiRequest, setUnauthorizedHandler } from './utils/api';
-import { Navbar } from './components/Navbar';
+import { Navbar, NavTab } from './components/Navbar';
 import { LoginScreen } from './screens/LoginScreen';
 import { TenantsListScreen } from './screens/TenantsListScreen';
 import { TenantDetailScreen } from './screens/TenantDetailScreen';
 import { AuditLogScreen } from './screens/AuditLogScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { LiveSupportScreen } from './screens/LiveSupportScreen';
 
 export const App: React.FC = () => {
   const [admin, setAdmin] = useState<AdminMe | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
-  const [currentTab, setCurrentTab] = useState<'tenants' | 'audit' | 'settings'>('tenants');
+  const [currentTab, setCurrentTab] = useState<NavTab>('tenants');
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  const [supportTenant, setSupportTenant] = useState<TenantSummary | null>(null);
 
   const checkAuth = async () => {
     try {
@@ -81,6 +83,21 @@ export const App: React.FC = () => {
           <TenantDetailScreen
             tenantId={selectedTenantId}
             onBack={() => setSelectedTenantId(null)}
+            onStartLiveSupport={(tenant) => {
+              setSupportTenant(tenant);
+              setCurrentTab('support');
+            }}
+          />
+        )}
+
+        {currentTab === 'support' && (
+          <LiveSupportScreen
+            initialTenant={supportTenant}
+            onClearTenant={() => setSupportTenant(null)}
+            onBackToTenants={() => {
+              setCurrentTab('tenants');
+              setSelectedTenantId(null);
+            }}
           />
         )}
 

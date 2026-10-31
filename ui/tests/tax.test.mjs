@@ -131,17 +131,27 @@ function computeSaleTotals(lines, priceMode, sellerStateCode, placeOfSupplyState
       isIntraState
     );
 
+    const isReturn = !!line.is_return;
+    const sign = isReturn ? -1 : 1;
+
     const lineSubtotal = comp.taxable_paise + comp.discount_paise;
-    sumSubtotal += lineSubtotal;
-    sumDiscount += comp.discount_paise;
-    sumTaxable += comp.taxable_paise;
-    sumCgst += comp.cgst_paise;
-    sumSgst += comp.sgst_paise;
-    sumIgst += comp.igst_paise;
+    sumSubtotal += lineSubtotal * sign;
+    sumDiscount += comp.discount_paise * sign;
+    sumTaxable += comp.taxable_paise * sign;
+    sumCgst += comp.cgst_paise * sign;
+    sumSgst += comp.sgst_paise * sign;
+    sumIgst += comp.igst_paise * sign;
 
     return {
       ...line,
-      ...comp,
+      is_return: isReturn,
+      gross_paise: comp.gross_paise * sign,
+      discount_paise: comp.discount_paise * sign,
+      taxable_paise: comp.taxable_paise * sign,
+      cgst_paise: comp.cgst_paise * sign,
+      sgst_paise: comp.sgst_paise * sign,
+      igst_paise: comp.igst_paise * sign,
+      line_total_paise: comp.line_total_paise * sign,
     };
   });
 
@@ -291,6 +301,43 @@ console.log('--- Running Rust Tax.rs Mirror Tests in JavaScript ---');
   assert.strictEqual(r2.totals.round_off_paise, 50);
   assert.strictEqual(r2.totals.total_amount_paise, 11900);
   console.log('✓ Test 7: Round-off bounds (-49 to +50 paise) verified');
+}
+
+// Test 8: Retail POS F2 Return & Exchange Mode
+{
+  // Customer buys Item A (₹500 + 18% GST = ₹590) and returns Item B (₹200 + 18% GST = ₹236)
+  // Net Taxable: ₹300, CGST: ₹27, SGST: ₹27, Net Total Payable: ₹354
+  const exchange = computeSaleTotals(
+    [
+      { resource_id: 'res_buy', quantity_milli: 1000, unit_price_paise: 50000, discount_paise: 0, tax_rate_bps: 1800, is_return: false },
+      { resource_id: 'res_ret', quantity_milli: 1000, unit_price_paise: 20000, discount_paise: 0, tax_rate_bps: 1800, is_return: true },
+    ],
+    'EXCLUSIVE',
+    '27',
+    '27'
+  );
+  assert.strictEqual(exchange.lines[0].line_total_paise, 59000);
+  assert.strictEqual(exchange.lines[1].line_total_paise, -23600);
+  assert.strictEqual(exchange.totals.taxable_paise, 30000);
+  assert.strictEqual(exchange.totals.cgst_paise, 2700);
+  assert.strictEqual(exchange.totals.sgst_paise, 2700);
+  assert.strictEqual(exchange.totals.total_amount_paise, 35400);
+
+  // Pure Return (Refund due to customer): Customer returns ₹500 item, total = -₹590
+  const refund = computeSaleTotals(
+    [
+      { resource_id: 'res_ret', quantity_milli: 1000, unit_price_paise: 50000, discount_paise: 0, tax_rate_bps: 1800, is_return: true },
+    ],
+    'EXCLUSIVE',
+    '27',
+    '27'
+  );
+  assert.strictEqual(refund.lines[0].line_total_paise, -59000);
+  assert.strictEqual(refund.totals.taxable_paise, -50000);
+  assert.strictEqual(refund.totals.cgst_paise, -4500);
+  assert.strictEqual(refund.totals.sgst_paise, -4500);
+  assert.strictEqual(refund.totals.total_amount_paise, -59000);
+  console.log('✓ Test 8: Retail POS F2 Return & Exchange (net payable & refund) verified');
 }
 
 console.log('ALL TAX TESTS PASSED SUCCESSFULLY!');

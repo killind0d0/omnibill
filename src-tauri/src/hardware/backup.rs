@@ -7,7 +7,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
 };
 use rand_core::{OsRng, RngCore};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -39,6 +39,22 @@ pub struct RestoreSummary {
     pub schema_version: i32,
     pub sha256_checksum: String,
     pub total_bytes: u64,
+}
+
+/// Preview of a backup archive prior to execution.
+/// Exposes transaction counts, last invoice number, and account counts so the operator
+/// can visually verify the archive before restoring.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupPreview {
+    pub backup_id: String,
+    pub created_at: String,
+    pub schema_version: i32,
+    pub sha256_checksum: String,
+    pub total_bytes: u64,
+    pub is_encrypted: bool,
+    pub transaction_count: i64,
+    pub last_invoice_number: Option<String>,
+    pub account_count: i64,
 }
 
 /// Strongly typed errors that can occur during backup or restore operations.
@@ -500,6 +516,16 @@ pub fn restore_backup(
     }
 
     // 10. All checks passed on temporary DB! Now safely write to target path.
+    // Ensure automatic pre-restore snapshot is captured if target DB already exists
+    if Path::new(target_db_path).exists() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let pre_restore_bak = format!("{}.pre_restore_{}.bak", target_db_path, timestamp);
+        let _ = fs::copy(target_db_path, &pre_restore_bak);
+    }
+
     if let Some(parent) = Path::new(target_db_path).parent()
         && !parent.as_os_str().is_empty()
     {
@@ -522,6 +548,133 @@ pub fn restore_backup(
         schema_version: restored_version,
         sha256_checksum: expected_checksum,
         total_bytes: file_bytes.len() as u64,
+    })
+}
+
+/// Previews the contents of a backup archive before applying it.
+/// Extracts metadata from the container and inspects transaction count, last invoice, and account count.
+pub fn preview_backup(
+    backup_file_path: &str,
+    decryption_passphrase: Option<&str>,
+) -> Result<BackupPreview, BackupError> {
+    let file_bytes = fs::read(backup_file_path)?;
+    if file_bytes.is_empty() {
+        return Err(BackupError::CorruptedBackup("Backup file is empty".into()));
+    }
+
+    if !file_bytes.starts_with(MAGIC_HEADER.as_bytes()) {
+        return Err(BackupError::InvalidHeader(format!(
+            "Missing magic header: expected starts with '{}'",
+            MAGIC_HEADER
+        )));
+    }
+
+    let (header_end_idx, payload_start_idx) =
+        if let Some(pos) = file_bytes.windows(2).position(|w| w == b"\n\n") {
+            (pos, pos + 2)
+        } else if let Some(pos) = file_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            (pos, pos + 4)
+        } else {
+            return Err(BackupError::InvalidHeader(
+                "Missing header end delimiter in backup file".into(),
+            ));
+        };
+
+    let header_str = std::str::from_utf8(&file_bytes[..header_end_idx])
+        .map_err(|e| BackupError::InvalidHeader(format!("Header is not valid UTF-8: {}", e)))?;
+
+    let mut backup_id = String::new();
+    let mut created_at = String::new();
+    let mut schema_version: Option<i32> = None;
+    let mut is_encrypted = false;
+    let mut salt = Vec::new();
+    let mut nonce = Vec::new();
+    let mut expected_checksum = String::new();
+
+    for line in header_str.lines() {
+        let line = line.trim();
+        if line == MAGIC_HEADER || line.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim().to_uppercase();
+            let val = v.trim();
+            match key.as_str() {
+                "BACKUP_ID" | "ID" => backup_id = val.to_string(),
+                "CREATED_AT" | "TIMESTAMP" => created_at = val.to_string(),
+                "SCHEMA_VERSION" => {
+                    schema_version = val.parse().ok();
+                }
+                "ENCRYPTED" => {
+                    is_encrypted = val == "1" || val.eq_ignore_ascii_case("true");
+                }
+                "SALT" => {
+                    salt = hex_to_bytes(val)?;
+                }
+                "NONCE" => {
+                    nonce = hex_to_bytes(val)?;
+                }
+                "CHECKSUM" | "SHA256" => {
+                    expected_checksum = val.to_lowercase();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let payload = &file_bytes[payload_start_idx..];
+    let actual_checksum = compute_sha256(payload);
+    if actual_checksum != expected_checksum {
+        return Err(BackupError::ChecksumMismatch {
+            expected: expected_checksum,
+            actual: actual_checksum,
+        });
+    }
+
+    let raw_db_bytes = if is_encrypted {
+        let passphrase = decryption_passphrase.ok_or(BackupError::PassphraseRequired)?;
+        decrypt_payload(payload, passphrase, &salt, &nonce)?
+    } else {
+        payload.to_vec()
+    };
+
+    let temp_dir = std::env::temp_dir();
+    let temp_preview_path = temp_dir.join(format!("omnibill_preview_{}.tmp", Uuid::new_v4()));
+    let _guard = TempFileGuard::new(temp_preview_path.clone());
+    fs::write(&temp_preview_path, &raw_db_bytes)?;
+
+    let src_temp = crate::access::dbopen::open_database(
+        temp_preview_path.to_str().unwrap_or(""),
+        None,
+    )?;
+
+    let tx_count: i64 = src_temp
+        .query_row("SELECT count(*) FROM transactions", [], |r| r.get(0))
+        .unwrap_or(0);
+
+    let last_invoice: Option<String> = src_temp
+        .query_row(
+            "SELECT invoice_number FROM transactions ORDER BY created_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap_or(None);
+
+    let account_count: i64 = src_temp
+        .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))
+        .unwrap_or(0);
+
+    Ok(BackupPreview {
+        backup_id,
+        created_at,
+        schema_version: schema_version.unwrap_or(0),
+        sha256_checksum: expected_checksum,
+        total_bytes: file_bytes.len() as u64,
+        is_encrypted,
+        transaction_count: tx_count,
+        last_invoice_number: last_invoice,
+        account_count,
     })
 }
 
@@ -601,7 +754,7 @@ mod tests {
                 invoice_number, entity_id, subtotal_paise, discount_paise, taxable_paise,
                 cgst_paise, sgst_paise, igst_paise, round_off_paise, total_amount_paise,
                 transaction_type, original_transaction_id, invoice_date, created_by_user_id
-            ) VALUES ('tx_1', 'POSTED', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
+            ) VALUES ('tx_1', 'DRAFT', '27', '27', 'INV', 'INV/26-27/0001', 'ent_1', 1000, 0, 1000, 0, 0, 0, 0, 1000, 'SALE', NULL, '2026-10-20', 'usr_1')",
             [],
         ).expect("seed tx");
 
@@ -621,6 +774,12 @@ mod tests {
             [],
         )
         .expect("seed le 2");
+
+        conn.execute(
+            "UPDATE transactions SET status = 'POSTED' WHERE id = 'tx_1'",
+            [],
+        )
+        .expect("post tx");
 
         conn
     }
@@ -790,9 +949,9 @@ mod tests {
 
         let conn = setup_migrated_populated_db(&src_db_path);
 
-        // Corrupt the database ledger before backup: disable triggers and add an unbalanced entry
-        conn.execute("PRAGMA recursive_triggers = OFF", [])
-            .expect("disable triggers");
+        // Corrupt the database ledger before backup: drop trigger and add an unbalanced entry
+        conn.execute("DROP TRIGGER IF EXISTS trg_ledger_entries_insert_only_on_draft", [])
+            .expect("drop trigger");
         conn.execute(
             "INSERT INTO ledger_entries (id, transaction_id, account_id, debit_paise, credit_paise, narration)
              VALUES ('led_bad', 'tx_1', 'acc_ar', 9999, 0, 'Corrupt unbalanced debit')",
