@@ -221,6 +221,16 @@ pub fn insert_persistent_audit_entry(
 
 /// External anchor path for tamper detection against tail-truncation.
 fn external_anchor_path() -> std::path::PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let dir = std::path::PathBuf::from(appdata).join("OmniBill");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join(".omnibill_audit_anchor.json");
+    }
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        let dir = std::path::PathBuf::from(userprofile).join(".omnibill");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join(".omnibill_audit_anchor.json");
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(home).join(".omnibill_audit_anchor.json")
 }

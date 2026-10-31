@@ -15,7 +15,12 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use rust_embed::RustEmbed;
 use uuid::Uuid;
+
+#[derive(RustEmbed)]
+#[folder = "../ui/dist"]
+struct FrontendDist;
 
 static VERTICAL_AUTH_STATES: LazyLock<Mutex<HashMap<String, Arc<AppAuthState>>>> = LazyLock::new(|| {
     let mut map = HashMap::new();
@@ -40,8 +45,101 @@ pub fn get_vertical_auth_state(vertical: &str) -> Arc<AppAuthState> {
 }
 
 fn default_db_path() -> String {
-    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    format!("{}/omnibill.db", home)
+    if let Ok(appdata) = env::var("APPDATA") {
+        let dir = Path::new(&appdata).join("OmniBill");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join("omnibill.db").to_string_lossy().to_string();
+    }
+    if let Ok(userprofile) = env::var("USERPROFILE") {
+        let dir = Path::new(&userprofile).join(".omnibill");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join("omnibill.db").to_string_lossy().to_string();
+    }
+    if let Ok(home) = env::var("HOME") {
+        let dir = Path::new(&home).join(".omnibill");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join("omnibill.db").to_string_lossy().to_string();
+    }
+    "./omnibill.db".to_string()
+}
+
+fn default_backups_dir() -> String {
+    if let Ok(appdata) = env::var("APPDATA") {
+        let dir = Path::new(&appdata).join("OmniBill").join("backups");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.to_string_lossy().to_string();
+    }
+    if let Ok(userprofile) = env::var("USERPROFILE") {
+        let dir = Path::new(&userprofile).join(".omnibill").join("backups");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.to_string_lossy().to_string();
+    }
+    if let Ok(home) = env::var("HOME") {
+        let dir = Path::new(&home).join(".omnibill").join("backups");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.to_string_lossy().to_string();
+    }
+    let dir = Path::new(".").join("omnibill_backups");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.to_string_lossy().to_string()
+}
+
+fn open_browser(url: &str) {
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", &url])
+                .spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(&url)
+                .spawn();
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&url)
+                .spawn();
+        }
+    });
+}
+
+fn get_mime_type(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".html") || lower.ends_with(".htm") {
+        "text/html; charset=utf-8"
+    } else if lower.ends_with(".js") || lower.ends_with(".mjs") {
+        "application/javascript; charset=utf-8"
+    } else if lower.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if lower.ends_with(".json") || lower.ends_with(".webmanifest") {
+        "application/json; charset=utf-8"
+    } else if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else if lower.ends_with(".ico") {
+        "image/x-icon"
+    } else if lower.ends_with(".woff2") {
+        "font/woff2"
+    } else if lower.ends_with(".woff") {
+        "font/woff"
+    } else if lower.ends_with(".ttf") {
+        "font/ttf"
+    } else if lower.ends_with(".wasm") {
+        "application/wasm"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 fn print_help() {
@@ -713,55 +811,121 @@ fn handle_client(mut stream: TcpStream, db_path: &str, port: u16) {
     }
 
     let req_str = String::from_utf8_lossy(&req_bytes);
-    let (status_code, json_body, allowed_origin) = process_http_request(&req_str, port, db_path);
-
-    let cors_header = match allowed_origin {
-        Some(ref origin) => format!("Access-Control-Allow-Origin: {}\r\n", origin),
-        None => String::new(),
+    let parsed = match parse_http_request(&req_str) {
+        Some(p) => p,
+        None => {
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nBad Request");
+            return;
+        }
     };
 
-    let status_text = match status_code {
-        200 => "OK",
-        204 => "No Content",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        413 => "Payload Too Large",
-        500 => "Internal Server Error",
-        _ => "OK",
-    };
+    let clean_path = parsed.path.split('?').next().unwrap_or(parsed.path);
 
-    let response = if status_code == 204 {
-        format!(
-            "HTTP/1.1 204 No Content\r\n\
-             {}\
-             Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-             Access-Control-Allow-Headers: Content-Type, Authorization, X-Vertical, X-Business-Type\r\n\
-             Cache-Control: no-store\r\n\
-             Connection: close\r\n\r\n",
-            cors_header
-        )
+    // If it's an API request or OPTIONS preflight, route to guarded JSON API
+    if clean_path.starts_with("/api") || parsed.method == "OPTIONS" {
+        let (status_code, json_body, allowed_origin) = process_http_request(&req_str, port, db_path);
+
+        let cors_header = match allowed_origin {
+            Some(ref origin) => format!("Access-Control-Allow-Origin: {}\r\n", origin),
+            None => String::new(),
+        };
+
+        let status_text = match status_code {
+            200 => "OK",
+            204 => "No Content",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            413 => "Payload Too Large",
+            500 => "Internal Server Error",
+            _ => "OK",
+        };
+
+        let response = if status_code == 204 {
+            format!(
+                "HTTP/1.1 204 No Content\r\n\
+                 {}\
+                 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                 Access-Control-Allow-Headers: Content-Type, Authorization, X-Vertical, X-Business-Type\r\n\
+                 Cache-Control: no-store\r\n\
+                 Connection: close\r\n\r\n",
+                cors_header
+            )
+        } else {
+            format!(
+                "HTTP/1.1 {} {}\r\n\
+                 Content-Type: application/json\r\n\
+                 {}\
+                 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                 Access-Control-Allow-Headers: Content-Type, Authorization, X-Vertical, X-Business-Type\r\n\
+                 Cache-Control: no-store\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n\
+                 {}",
+                status_code,
+                status_text,
+                cors_header,
+                json_body.len(),
+                json_body
+            )
+        };
+
+        let _ = stream.write_all(response.as_bytes());
+        return;
+    }
+
+    // Static asset serving from embedded FrontendDist (React/Vite SPA bundle)
+    if parsed.method != "GET" && parsed.method != "HEAD" {
+        let _ = stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\nMethod Not Allowed");
+        return;
+    }
+
+    let lookup_raw = clean_path.trim_start_matches('/');
+    let (file_opt, mime, is_immutable) = if lookup_raw.is_empty() || lookup_raw == "index.html" {
+        (FrontendDist::get("index.html"), "text/html; charset=utf-8", false)
+    } else if let Some(file) = FrontendDist::get(lookup_raw) {
+        let is_asset = lookup_raw.starts_with("assets/");
+        (Some(file), get_mime_type(lookup_raw), is_asset)
     } else {
-        format!(
-            "HTTP/1.1 {} {}\r\n\
-             Content-Type: application/json\r\n\
-             {}\
-             Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-             Access-Control-Allow-Headers: Content-Type, Authorization, X-Vertical, X-Business-Type\r\n\
-             Cache-Control: no-store\r\n\
-             Content-Length: {}\r\n\
-             Connection: close\r\n\r\n\
-             {}",
-            status_code,
-            status_text,
-            cors_header,
-            json_body.len(),
-            json_body
-        )
+        // SPA Fallback: If not found and does not look like a static asset file with extension, serve index.html
+        let is_file_request = lookup_raw.split('/').last().map(|s| s.contains('.')).unwrap_or(false);
+        if !is_file_request {
+            (FrontendDist::get("index.html"), "text/html; charset=utf-8", false)
+        } else {
+            (None, "text/plain", false)
+        }
     };
 
-    let _ = stream.write_all(response.as_bytes());
+    match file_opt {
+        Some(file) => {
+            let cache_header = if is_immutable {
+                "Cache-Control: public, max-age=31536000, immutable\r\n"
+            } else {
+                "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+            };
+
+            let head = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: {}\r\n\
+                 {}\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                mime,
+                cache_header,
+                file.data.len()
+            );
+
+            let _ = stream.write_all(head.as_bytes());
+            if parsed.method == "GET" {
+                let _ = stream.write_all(&file.data);
+            }
+        }
+        None => {
+            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found";
+            let _ = stream.write_all(not_found.as_bytes());
+        }
+    }
 }
 
 pub const ROUTES: &[(&str, &str)] = omnibill_core::access::routes::ROUTES;
@@ -1342,9 +1506,7 @@ pub fn guarded_dispatch(
             }
             match serde_json::from_str::<Req>(args) {
                 Ok(r) => {
-                    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                    let backups_dir = format!("{}/omnibill_backups", home);
-                    let _ = std::fs::create_dir_all(&backups_dir);
+                    let backups_dir = default_backups_dir();
 
                     let ts = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -1451,9 +1613,7 @@ pub fn guarded_dispatch(
                     };
 
                     // Automatic Safety Pre-Restore Snapshot of active DB before overwriting!
-                    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                    let backups_dir = format!("{}/omnibill_backups", home);
-                    let _ = std::fs::create_dir_all(&backups_dir);
+                    let backups_dir = default_backups_dir();
                     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                     let safety_snapshot_path = format!("{}/safety_pre_restore_{}_{}.omnibackup", backups_dir, vert, ts);
 
@@ -1475,9 +1635,7 @@ pub fn guarded_dispatch(
             }
         }
         "cmd_backup_list" => {
-            let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let backups_dir = format!("{}/omnibill_backups", home);
-            let _ = std::fs::create_dir_all(&backups_dir);
+            let backups_dir = default_backups_dir();
 
             let mut list = Vec::new();
             if let Ok(entries) = std::fs::read_dir(&backups_dir) {
@@ -1692,11 +1850,23 @@ fn main() {
     let default_db = default_db_path();
 
     if args.len() < 2 {
-        print_help();
+        println!("============================================================");
+        println!("   OmniBill ERP — Next-Gen Standalone POS & ERP System");
+        println!("============================================================");
+        println!("[OmniBill] Starting local standalone application...");
+        println!("[OmniBill] Web Interface: http://127.0.0.1:4000/");
+        println!("[OmniBill] Database: {}", default_db);
+        println!("[OmniBill] Launching default web browser...");
+
+        open_browser("http://127.0.0.1:4000/");
+        handle_serve(4000, &default_db);
         return;
     }
 
     match args[1].as_str() {
+        "--help" | "-h" | "help" => {
+            print_help();
+        }
         "--init" => {
             let db_path = args.get(2).map(|s| s.as_str()).unwrap_or(&default_db);
             handle_init(db_path);
@@ -1735,6 +1905,7 @@ fn main() {
                 .and_then(|p| p.parse::<u16>().ok())
                 .unwrap_or(4000);
             let db_path = args.get(3).map(|s| s.as_str()).unwrap_or(&default_db);
+            open_browser(&format!("http://127.0.0.1:{}/", port));
             handle_serve(port, db_path);
         }
         "--encrypt-existing-db" => {
@@ -1751,9 +1922,6 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-        }
-        "--help" | "-h" => {
-            print_help();
         }
         other => {
             eprintln!("Unknown option: {}", other);

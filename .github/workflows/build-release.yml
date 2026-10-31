@@ -96,13 +96,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/windows/OmniBill-Portable
           Copy-Item src-tauri/target/release/omnibill.exe dist/windows/OmniBill-Portable/OmniBill.exe
-          Copy-Item -Recurse ui/dist dist/windows/OmniBill-Portable/ui_dist
-          
-          # Add single-click Windows starter launcher script
-          Set-Content -Path dist/windows/OmniBill-Portable/Run-OmniBill.bat -Value "@echo off`r`necho Starting OmniBill POS...`r`nstart OmniBill.exe --serve 4000`r`ntimeout /t 2 >nul`r`nstart http://127.0.0.1:4000/`r`n"
-          
-          # Compress to zip for clean customer download
-          Compress-Archive -Path dist/windows/OmniBill-Portable/* -DestinationPath dist/OmniBill-v1.0.0-windows-x64.zip -Force
+          Set-Content -Path dist/windows/OmniBill-Portable/README.txt -Value "OmniBill POS Desktop`r`n`r`nDouble-click OmniBill.exe to launch!`r`nYour web browser will automatically open to http://127.0.0.1:4000/`r`n"
+          Compress-Archive -Path dist/windows/OmniBill-Portable/* -DestinationPath dist/OmniBill-windows-x64.zip -Force
           Copy-Item src-tauri/target/release/omnibill.exe dist/OmniBill.exe
 
       - name: Upload Windows Assets to GitHub Release
@@ -110,7 +105,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           files: |
-            dist/OmniBill-v1.0.0-windows-x64.zip
+            dist/OmniBill-windows-x64.zip
             dist/OmniBill.exe
           tag_name: ${{ github.ref_name }}
         env:
@@ -120,7 +115,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: omnibill-windows-x64
-          path: dist/OmniBill-v1.0.0-windows-x64.zip
+          path: dist/OmniBill-windows-x64.zip
 
   build-linux:
     name: Build Linux Standalone (.tar.gz)
@@ -153,22 +148,18 @@ jobs:
       - name: Package Linux Bundle
         run: |
           mkdir -p dist/linux/omnibill-bundle
-          cp src-tauri/target/release/omnibill dist/linux/omnibill-bundle/
-          cp -r ui/dist dist/linux/omnibill-bundle/
-          cat << 'EOF' > dist/linux/omnibill-bundle/run.sh
-          #!/bin/bash
-          ./omnibill --serve 4000 &
-          sleep 1
-          xdg-open http://127.0.0.1:4000/ 2>/dev/null || sensible-browser http://127.0.0.1:4000/
-          EOF
-          chmod +x dist/linux/omnibill-bundle/run.sh dist/linux/omnibill-bundle/omnibill
-          tar -czf dist/OmniBill-v1.0.0-linux-x64.tar.gz -C dist/linux/omnibill-bundle .
+          cp src-tauri/target/release/omnibill dist/linux/omnibill-bundle/OmniBill
+          chmod +x dist/linux/omnibill-bundle/OmniBill
+          tar -czf dist/OmniBill-linux-x64.tar.gz -C dist/linux/omnibill-bundle .
+          cp src-tauri/target/release/omnibill dist/OmniBill-linux
 
       - name: Upload Linux Assets to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          files: dist/OmniBill-v1.0.0-linux-x64.tar.gz
+          files: |
+            dist/OmniBill-linux-x64.tar.gz
+            dist/OmniBill-linux
           tag_name: ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
