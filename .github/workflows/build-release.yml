@@ -174,7 +174,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy-android-pwa:
-    name: Deploy Android & Mobile Web POS (PWA)
+    name: Deploy Customer POS & Super Admin Control Plane to GitHub Pages
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -185,18 +185,32 @@ jobs:
         with:
           node-version: 20
 
-      - name: Build PWA Web App
+      - name: Build Customer POS (PWA)
         run: |
           cd ui
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
           npm run build
-          touch dist/.nojekyll
+          cd ..
+
+      - name: Build Super Admin Control Plane
+        run: |
+          cd control-plane/web
+          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+          npm run build
+          cd ../..
+
+      - name: Assemble Unified Web Distribution
+        run: |
+          mkdir -p site_dist/admin
+          cp -r ui/dist/* site_dist/
+          cp -r control-plane/web/dist/* site_dist/admin/
+          touch site_dist/.nojekyll
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./ui/dist
+          publish_dir: ./site_dist
           publish_branch: gh-pages
           force_orphan: true
