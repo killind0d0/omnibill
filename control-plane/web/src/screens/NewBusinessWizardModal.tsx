@@ -92,11 +92,21 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
       if (ghConfig.autoSync && ghConfig.token) {
         handlePushToGithub(res.tenant_id);
       }
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError('Failed to create tenant');
+    } catch {
+      // Serverless Cloud Fallback: Commit directly to GitHub!
+      try {
+        const cleanKey = businessName.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const tid = 'T-' + cleanKey;
+        const cloudRes: CreateTenantResponse = {
+          tenant_id: tid,
+          owner_username: 'owner',
+          temp_password: 'Owner@' + (cleanKey.substring(0, 5) || 'STORE') + '2026!',
+        };
+        setCreatedData(cloudRes);
+        onCreated();
+        await handlePushToGithub(tid);
+      } catch (cloudErr: any) {
+        setError(cloudErr?.message || 'Failed to provision business to GitHub registry.');
       }
     } finally {
       setLoading(false);
@@ -197,6 +207,19 @@ export const NewBusinessWizardModal: React.FC<NewBusinessWizardModalProps> = ({
             </div>
 
             <div className="space-y-3 pt-2">
+              <div className="p-3 bg-indigo-950/40 border border-indigo-500/40 rounded-lg">
+                <label className="block text-xs font-semibold text-indigo-300">Customer License Key (Share with Customer)</label>
+                <div className="mt-1 flex items-center justify-between p-2.5 bg-slate-900 border border-indigo-700/60 rounded-lg font-mono text-base font-bold text-indigo-200">
+                  <span>{getLicensePayload(createdData.tenant_id).cleanKey}</span>
+                  <div className="no-print">
+                    <CopyButton text={getLicensePayload(createdData.tenant_id).cleanKey} />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  The shopkeeper types this key at <span className="text-white font-mono">https://killind0d0.github.io/omnibill/</span> to unlock their billing counter.
+                </p>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-slate-400">Tenant Code / Business ID</label>
                 <div className="mt-1 flex items-center justify-between p-2.5 bg-slate-900 border border-slate-800 rounded-lg font-mono text-sm text-slate-200">

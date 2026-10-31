@@ -19,6 +19,10 @@ control-plane/*.db*
 *.db*
 *.sqlite*
 *.log
+dist/
+*/dist/
+.vite/
+ui/.vite/
 scripts/screenshots/
 *.png
 !ui/public/*.png

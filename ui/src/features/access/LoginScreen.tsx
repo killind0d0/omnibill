@@ -245,15 +245,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               onClick={() => setIsBackupModalOpen(true)}
               className="hover:text-slate-300 transition"
             >
-              Encrypted Backup Hub
+              Backup Hub
             </button>
+            <a
+              href="./admin/"
+              className="hover:text-indigo-400 text-indigo-400/80 transition"
+              title="Open Super Admin Management Portal"
+            >
+              ⚙️ Super Admin Portal
+            </a>
             {onOpenActivation && (
               <button
                 type="button"
                 onClick={onOpenActivation}
                 className="hover:text-emerald-400 transition"
               >
-                License Activation
+                License Key
               </button>
             )}
           </div>

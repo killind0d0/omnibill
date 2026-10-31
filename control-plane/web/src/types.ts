@@ -14,6 +14,12 @@ export interface TenantSummary {
   notes: string;
   active_devices: number;
   last_checkin_ms: number;
+  license_key?: string;
+  valid_until?: string;
+  sha?: string;
+  gstin?: string;
+  support_contact?: string;
+  raw_payload?: any;
 }
 
 export interface DeviceInfo {

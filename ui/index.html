@@ -16,6 +16,9 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      if (window.location.hash.toLowerCase().startsWith('#/admin') || window.location.hash.toLowerCase().startsWith('#admin')) {
+        window.location.href = './admin/';
+      }
       if ('serviceWorker' in navigator && !window.__TAURI__) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('./sw.js').catch(() => {});

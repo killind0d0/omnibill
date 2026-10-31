@@ -19,9 +19,21 @@ export const App: React.FC = () => {
   const checkAuth = async () => {
     try {
       setCheckingAuth(true);
+      // 1. Try local daemon session
       const me = await apiRequest<AdminMe>('/v1/admin/me');
       setAdmin(me);
     } catch {
+      // 2. Fallback to Cloud Admin session in localStorage
+      try {
+        const stored = localStorage.getItem('omnibill_admin_cloud_session');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.username) {
+            setAdmin(parsed);
+            return;
+          }
+        }
+      } catch {}
       setAdmin(null);
     } finally {
       setCheckingAuth(false);
@@ -29,10 +41,13 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
-    // Intercept 401 unauthorized errors from any apiRequest
     setUnauthorizedHandler(() => {
-      setAdmin(null);
-      setSelectedTenantId(null);
+      // If 401 occurs, check if we are in cloud mode before kicking out
+      const stored = localStorage.getItem('omnibill_admin_cloud_session');
+      if (!stored) {
+        setAdmin(null);
+        setSelectedTenantId(null);
+      }
     });
 
     checkAuth();
@@ -45,6 +60,9 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    try {
+      localStorage.removeItem('omnibill_admin_cloud_session');
+    } catch {}
     setAdmin(null);
     setSelectedTenantId(null);
   };
@@ -53,7 +71,7 @@ export const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
         <div className="w-10 h-10 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mb-4" />
-        <div className="text-slate-400 font-mono text-sm">Verifying administrative session...</div>
+        <div className="text-slate-400 font-mono text-sm">Verifying Super Admin session...</div>
       </div>
     );
   }
@@ -106,8 +124,11 @@ export const App: React.FC = () => {
         {currentTab === 'settings' && <SettingsScreen />}
       </main>
 
-      <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500">
-        OmniBill Hardware-Secured Billing & Access Control Plane • Air-gapped & Offline-First
+      <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500 space-y-1">
+        <div>OmniBill Super Admin Control Plane • Serverless Cloud & Air-Gapped POS</div>
+        <div className="text-[11px] text-slate-600">
+          Sync Registry: <span className="font-mono text-slate-400">killind0d0/omnibill-licenses</span>
+        </div>
       </footer>
     </div>
   );

@@ -273,38 +273,45 @@ export const LicenseLockoutScreen: React.FC<LicenseLockoutScreenProps> = ({
         </div>
 
         {/* Developer Advanced Configuration Toggle */}
-        <div className="pt-2 border-t border-slate-800/40 text-[11px] text-slate-500">
+        <div className="pt-2 border-t border-slate-800/40 text-[11px] text-slate-500 flex items-center justify-between">
           <button
             type="button"
             onClick={() => setShowConfig(!showConfig)}
             className="hover:text-slate-400 underline transition cursor-pointer"
           >
-            {showConfig ? 'Hide GitHub Registry Config' : 'Configure GitHub Repository URL'}
+            {showConfig ? 'Hide GitHub Registry Config' : 'Configure GitHub Repository'}
           </button>
 
-          {showConfig && (
-            <div className="mt-2.5 p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
-              <label className="block text-slate-400 font-mono text-[10px]">
-                Raw GitHub Base URL:
-              </label>
-              <input
-                type="text"
-                value={registryUrl}
-                onChange={(e) => setRegistryUrl(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none"
-              />
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={handleSaveRegistryUrl}
-                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
-                >
-                  Save URL
-                </button>
-              </div>
-            </div>
-          )}
+          <a
+            href="./admin/"
+            className="text-indigo-400 hover:text-indigo-300 font-medium transition"
+          >
+            ⚙️ Super Admin Portal →
+          </a>
         </div>
+
+        {showConfig && (
+          <div className="mt-2.5 p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+            <label className="block text-slate-400 font-mono text-[10px]">
+              Raw GitHub Base URL:
+            </label>
+            <input
+              type="text"
+              value={registryUrl}
+              onChange={(e) => setRegistryUrl(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleSaveRegistryUrl}
+                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
+              >
+                Save URL
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

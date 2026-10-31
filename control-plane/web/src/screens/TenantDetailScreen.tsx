@@ -97,8 +97,22 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
           setUsageReports(usage.filter((u) => u.tenant_id === tenantId));
         })
         .catch(() => {});
-    } catch (err: any) {
-      setError(err.message || 'Failed to load tenant details');
+    } catch {
+      // Serverless Cloud Fallback: Load from GitHub Registry
+      try {
+        const ghTenant = await GithubSyncService.getTenant(tenantId);
+        if (ghTenant) {
+          setTenant(ghTenant);
+          setPlan(ghTenant.plan === 'basic' ? 'basic' : 'pro');
+          setMaxCounters(ghTenant.max_counters);
+          setOfflineDays(ghTenant.offline_days);
+          setNotes(ghTenant.notes || '');
+        } else {
+          setError('Business not found in registry');
+        }
+      } catch (ghErr: any) {
+        setError(ghErr?.message || 'Failed to load business details');
+      }
     } finally {
       setLoading(false);
     }
@@ -124,8 +138,20 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
       });
       setConfigMessage('Configuration updated successfully');
       loadTenant();
-    } catch (err: any) {
-      setConfigMessage(`Error: ${err.message}`);
+    } catch {
+      try {
+        const cleanKey = tenant?.license_key || tenantId;
+        await GithubSyncService.updateTenantPayload(cleanKey, {
+          plan,
+          max_counters: plan === 'basic' ? 1 : maxCounters,
+          offline_days: offlineDays,
+          notes,
+        });
+        setConfigMessage('Configuration updated in GitHub registry');
+        loadTenant();
+      } catch (err: any) {
+        setConfigMessage(`Error: ${err?.message || 'Update failed'}`);
+      }
     } finally {
       setIsSavingConfig(false);
     }
@@ -147,8 +173,15 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
       });
       setShowMarkPaidModal(false);
       loadTenant();
-    } catch (err: any) {
-      setMarkPaidError(err.message || 'Failed to record payment');
+    } catch {
+      try {
+        const cleanKey = tenant?.license_key || tenantId;
+        await GithubSyncService.extendLicenseValidity(cleanKey, markPaidMonths * 30);
+        setShowMarkPaidModal(false);
+        loadTenant();
+      } catch (err: any) {
+        setMarkPaidError(err.message || 'Failed to record payment');
+      }
     } finally {
       setIsMarkingPaid(false);
     }
@@ -161,8 +194,10 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
       try {
         await apiRequest(`/v1/admin/tenants/${tenantId}/resume`, { method: 'POST' });
         loadTenant();
-      } catch (err: any) {
-        alert(`Resume error: ${err.message}`);
+      } catch {
+        const cleanKey = tenant.license_key || tenantId;
+        await GithubSyncService.updateLicenseStatus(cleanKey, 'active');
+        loadTenant();
       }
     } else {
       setShowSuspendModal(true);
@@ -177,8 +212,12 @@ export const TenantDetailScreen: React.FC<TenantDetailScreenProps> = ({
       setShowSuspendModal(false);
       setSuspendConfirmText('');
       loadTenant();
-    } catch (err: any) {
-      alert(`Suspend error: ${err.message}`);
+    } catch {
+      const cleanKey = tenant.license_key || tenantId;
+      await GithubSyncService.updateLicenseStatus(cleanKey, 'suspended');
+      setShowSuspendModal(false);
+      setSuspendConfirmText('');
+      loadTenant();
     } finally {
       setIsSuspending(false);
     }

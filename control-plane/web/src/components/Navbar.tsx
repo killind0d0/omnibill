@@ -105,18 +105,26 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* User profile & Logout */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <a
+              href="../"
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-800/80 rounded-lg transition"
+              title="Switch to customer POS billing counter"
+            >
+              <span>🛒 Customer POS</span>
+            </a>
+
             {admin && (
               <div className="hidden md:flex items-center gap-2 text-xs text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                <span>Admin:</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Super Admin:</span>
                 <span className="font-mono font-medium text-slate-200">{admin.username}</span>
               </div>
             )}
 
             <button
               onClick={handleLogout}
-              className="px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors"
+              className="px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors cursor-pointer"
             >
               Sign Out
             </button>

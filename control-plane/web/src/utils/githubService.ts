@@ -1,5 +1,8 @@
 // control-plane/web/src/utils/githubService.ts
-// Automated GitHub Serverless License Sync & Deployment Service
+// Automated GitHub Serverless License Sync & Deployment Service for Super Admin
+
+import { TenantSummary } from '../types';
+import { currentIstDay, formatCivilDate } from './format';
 
 export interface GithubConfig {
   repo: string; // e.g. "killind0d0/omnibill-licenses"
@@ -33,7 +36,7 @@ export class GithubSyncService {
   }
 
   /**
-   * Saves GitHub configuration to localStorage and syncs with backend.
+   * Saves GitHub configuration to localStorage.
    */
   public static saveConfig(config: GithubConfig): void {
     if (typeof window === 'undefined') return;
@@ -159,6 +162,319 @@ export class GithubSyncService {
   }
 
   /**
+   * Helper to decode Base64 string safely handling UTF-8 characters.
+   */
+  public static decodeBase64Utf8(base64: string): string {
+    const cleanB64 = base64.replace(/\s/g, '');
+    const binary = atob(cleanB64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  }
+
+  /**
+   * Helper to encode UTF-8 string to Base64 safely.
+   */
+  public static encodeBase64Utf8(str: string): string {
+    const utf8Bytes = new TextEncoder().encode(str);
+    let binaryStr = '';
+    utf8Bytes.forEach((b) => (binaryStr += String.fromCharCode(b)));
+    return btoa(binaryStr);
+  }
+
+  /**
+   * Fetches the complete list of businesses directly from GitHub contents.
+   */
+  public static async listTenants(): Promise<TenantSummary[]> {
+    const config = this.getConfig();
+    const repo = config.repo.trim() || DEFAULT_REPO;
+    const token = config.token.trim();
+
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/licenses`;
+
+    const res = await fetch(apiUrl, {
+      method: 'GET',
+      headers,
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      if (res.status === 404) {
+        return [];
+      }
+      throw new Error(`Failed to read GitHub repository contents (HTTP ${res.status})`);
+    }
+
+    const items: Array<{
+      name: string;
+      path: string;
+      sha: string;
+      download_url: string;
+      type: string;
+    }> = await res.json();
+
+    if (!Array.isArray(items)) return [];
+
+    const jsonFiles = items.filter((it) => it.type === 'file' && it.name.endsWith('.json'));
+
+    const todayDay = currentIstDay();
+
+    // Fetch details for each license file in parallel (up to 15 concurrent)
+    const tenants: TenantSummary[] = [];
+
+    await Promise.all(
+      jsonFiles.map(async (file) => {
+        try {
+          const fileRes = await fetch(file.download_url, { cache: 'no-store' });
+          if (!fileRes.ok) return;
+          const payload = await fileRes.json();
+
+          const key = (payload.license_key || file.name.replace('.json', '')).toUpperCase();
+          const validUntilDay =
+            payload.valid_until_day ||
+            (payload.valid_until
+              ? Math.floor((new Date(payload.valid_until).getTime() + 19800000) / 86400000)
+              : todayDay + 30);
+
+          let computedStatus = 'active';
+          if (payload.status === 'suspended') {
+            computedStatus = 'suspended';
+          } else if (todayDay > validUntilDay + 7) {
+            computedStatus = 'expired';
+          } else if (todayDay > validUntilDay) {
+            computedStatus = 'expiring';
+          }
+
+          tenants.push({
+            id: payload.tenant_id || key,
+            business_name: payload.business_name || key,
+            vertical: payload.vertical || 'retail',
+            plan: payload.plan || 'pro',
+            valid_until_day: validUntilDay,
+            valid_until: payload.valid_until,
+            status: payload.status || 'active',
+            computed_status: computedStatus,
+            max_counters: payload.max_counters || (payload.plan === 'basic' ? 1 : 3),
+            offline_days: 3,
+            grace_days: 7,
+            export_permit_until_ms: 0,
+            created_ms: payload.issued_ms || Date.now(),
+            notes: `Key: ${key}`,
+            active_devices: 1,
+            last_checkin_ms: payload.issued_ms || Date.now(),
+            license_key: key,
+            sha: file.sha,
+            gstin: payload.gstin || '27AABCR1234D1Z5',
+            support_contact: payload.support_contact,
+            raw_payload: payload,
+          });
+        } catch (err) {
+          console.error(`Failed parsing license ${file.name}:`, err);
+        }
+      })
+    );
+
+    // Sort tenants alphabetically by business name
+    tenants.sort((a, b) => a.business_name.localeCompare(b.business_name));
+    return tenants;
+  }
+
+  /**
+   * Fetches a single business by ID or License Key.
+   */
+  public static async getTenant(idOrKey: string): Promise<TenantSummary | null> {
+    const all = await this.listTenants();
+    const needle = idOrKey.trim().toUpperCase();
+    return (
+      all.find(
+        (t) =>
+          t.id.toUpperCase() === needle ||
+          (t.license_key && t.license_key.toUpperCase() === needle) ||
+          t.business_name.toUpperCase() === needle
+      ) || null
+    );
+  }
+
+  /**
+   * Deletes / Revokes a license directly from GitHub repository.
+   */
+  public static async deleteLicense(licenseKey: string): Promise<{ ok: boolean; message: string }> {
+    const config = this.getConfig();
+    const token = config.token.trim();
+    const repo = config.repo.trim() || DEFAULT_REPO;
+
+    if (!token) {
+      return { ok: false, message: 'GitHub Token is required to delete licenses.' };
+    }
+
+    const cleanKey = licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+    const filePath = `licenses/${cleanKey}.json`;
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+
+    try {
+      // 1. Get SHA
+      const getRes = await fetch(apiUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+        },
+      });
+
+      if (!getRes.ok) {
+        return { ok: false, message: `License file not found on GitHub (HTTP ${getRes.status})` };
+      }
+
+      const fileData = await getRes.json();
+      const sha = fileData.sha;
+
+      // 2. Send DELETE
+      const delRes = await fetch(apiUrl, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: `Revoke and delete license for ${cleanKey}`,
+          sha,
+          branch: 'main',
+        }),
+      });
+
+      if (delRes.ok) {
+        return { ok: true, message: `Successfully revoked and removed ${cleanKey}.json from GitHub.` };
+      } else {
+        const err = await delRes.json().catch(() => ({}));
+        return { ok: false, message: err.message || `Failed to delete from GitHub (HTTP ${delRes.status})` };
+      }
+    } catch (err: any) {
+      return { ok: false, message: err?.message || 'Network error deleting license.' };
+    }
+  }
+
+  /**
+   * Updates license status (active or suspended) directly in GitHub repository.
+   */
+  public static async updateLicenseStatus(
+    licenseKey: string,
+    newStatus: 'active' | 'suspended'
+  ): Promise<{ ok: boolean; message: string }> {
+    return this.updateTenantPayload(licenseKey, { status: newStatus });
+  }
+
+  /**
+   * Extends validity of an existing license on GitHub.
+   */
+  public static async extendLicenseValidity(
+    licenseKey: string,
+    additionalDays: number
+  ): Promise<{ ok: boolean; message: string; newDateStr?: string }> {
+    const tenant = await this.getTenant(licenseKey);
+    if (!tenant || !tenant.raw_payload) {
+      return { ok: false, message: `License "${licenseKey}" not found.` };
+    }
+
+    const todayDay = currentIstDay();
+    const baseDay = Math.max(tenant.valid_until_day, todayDay);
+    const newValidDay = baseDay + additionalDays;
+    const newDate = new Date(newValidDay * 86400 * 1000);
+    const newDateStr = newDate.toISOString().split('T')[0];
+
+    const res = await this.updateTenantPayload(licenseKey, {
+      valid_until_day: newValidDay,
+      valid_until: newDateStr,
+      status: 'active', // Extending validity automatically unsuspends
+    });
+
+    return {
+      ok: res.ok,
+      message: res.message,
+      newDateStr: formatCivilDate(newValidDay),
+    };
+  }
+
+  /**
+   * Updates fields inside the license JSON and commits back to GitHub.
+   */
+  public static async updateTenantPayload(
+    licenseKey: string,
+    updates: Partial<any>
+  ): Promise<{ ok: boolean; message: string }> {
+    const config = this.getConfig();
+    const token = config.token.trim();
+    const repo = config.repo.trim() || DEFAULT_REPO;
+
+    if (!token) {
+      return { ok: false, message: 'GitHub Token required for updating licenses.' };
+    }
+
+    const cleanKey = licenseKey.trim().toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+    const filePath = `licenses/${cleanKey}.json`;
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+
+    try {
+      // 1. Fetch current file
+      const getRes = await fetch(apiUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+        },
+      });
+
+      if (!getRes.ok) {
+        return { ok: false, message: `License not found on GitHub (HTTP ${getRes.status})` };
+      }
+
+      const fileData = await getRes.json();
+      const existingSha = fileData.sha;
+      const existingJsonStr = this.decodeBase64Utf8(fileData.content);
+      const existingPayload = JSON.parse(existingJsonStr);
+
+      const mergedPayload = {
+        ...existingPayload,
+        ...updates,
+        license_key: cleanKey,
+      };
+
+      const updatedB64 = this.encodeBase64Utf8(JSON.stringify(mergedPayload, null, 2));
+
+      const putRes = await fetch(apiUrl, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: `Update license for ${mergedPayload.business_name || cleanKey}`,
+          content: updatedB64,
+          sha: existingSha,
+          branch: 'main',
+        }),
+      });
+
+      if (putRes.ok) {
+        return { ok: true, message: `Successfully updated ${cleanKey} in GitHub repository.` };
+      } else {
+        const err = await putRes.json().catch(() => ({}));
+        return { ok: false, message: err.message || `Failed to update GitHub license (HTTP ${putRes.status})` };
+      }
+    } catch (err: any) {
+      return { ok: false, message: err?.message || 'Network error updating license.' };
+    }
+  }
+
+  /**
    * Automatically commits and pushes a client's license JSON file to the GitHub repository.
    */
   public static async pushLicense(
@@ -204,11 +520,7 @@ export class GithubSyncService {
       }
 
       // 2. Base64 encode the JSON content safely (supports UTF-8 characters)
-      const jsonString = JSON.stringify(licensePayload, null, 2);
-      const utf8Bytes = new TextEncoder().encode(jsonString);
-      let binaryStr = '';
-      utf8Bytes.forEach((b) => (binaryStr += String.fromCharCode(b)));
-      const base64Content = btoa(binaryStr);
+      const base64Content = this.encodeBase64Utf8(JSON.stringify(licensePayload, null, 2));
 
       // 3. Put/Commit file to GitHub
       const isUpdate = Boolean(existingSha);
